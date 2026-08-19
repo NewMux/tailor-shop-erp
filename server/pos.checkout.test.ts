@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocked = vi.hoisted(() => ({ getDb: vi.fn() }));
 vi.mock("./db", () => ({ getDb: mocked.getDb }));
 
-import { posRouter } from "./pos";
+import { calculateExchangeSettlement, posRouter } from "./pos";
 
 const query = (rows: unknown[]) => ({
   from: () => ({
@@ -16,6 +16,12 @@ const query = (rows: unknown[]) => ({
 
 describe("pos.checkout", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("calculates exchange refunds and balances in the correct direction", () => {
+    expect(calculateExchangeSettlement(50, 35)).toEqual({ difference: -15, refundAmount: 15, amountDue: 0 });
+    expect(calculateExchangeSettlement(50, 65)).toEqual({ difference: 15, refundAmount: 0, amountDue: 15 });
+    expect(calculateExchangeSettlement(50, 50)).toEqual({ difference: 0, refundAmount: 0, amountDue: 0 });
+  });
 
   it("persists the live-mapped line, linked stock update, and invoice within the sale transaction", async () => {
     const writes: unknown[] = [];

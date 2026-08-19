@@ -7,7 +7,7 @@ import { protectedProcedure, router } from "./_core/trpc";
 
 const money = (value: number) => Number(value.toFixed(3)).toFixed(3);
 const paymentMethod = z.enum(["cash", "benefitpay", "bank_transfer", "credit_card"]);
-const returnMode = z.enum(["items", "amount"]);
+const returnMode = z.enum(["items", "amount", "exchange"]);
 const taxFor = (netAmount: number, shop: { vatEnabled?: boolean | null; vatRate?: string | number | null } | null | undefined) => { const vatRate = shop?.vatEnabled ? Number(shop.vatRate || 0) : 0; const vatAmount = Math.max(0, netAmount) * vatRate / 100; return { vatRate, vatAmount, netAmount: Math.max(0, netAmount), grossAmount: Math.max(0, netAmount) + vatAmount }; };
 const taxFromGross = (grossAmount: number, shop: { vatEnabled?: boolean | null; vatRate?: string | number | null } | null | undefined) => { const vatRate = shop?.vatEnabled ? Number(shop.vatRate || 0) : 0; const gross = Math.max(0, grossAmount); const netAmount = gross / (1 + vatRate / 100); return { vatRate, vatAmount: gross - netAmount, netAmount, grossAmount: gross }; };
 const cartItem = z.object({
@@ -25,6 +25,11 @@ export const calculateCheckoutTotal = (items: Array<{ quantity: number; unitPric
   const lineDiscount = items.reduce((sum, item) => sum + Math.min(item.quantity * item.unitPrice, item.lineDiscount || 0), 0);
   const total = Math.max(0, subtotal - lineDiscount - discount);
   return { subtotal, total };
+};
+
+export const calculateExchangeSettlement = (returnedGross: number, replacementGross: number) => {
+  const difference = Number((replacementGross - returnedGross).toFixed(3));
+  return { difference, refundAmount: Math.max(0, -difference), amountDue: Math.max(0, difference) };
 };
 
 async function dbOrThrow() {
@@ -120,7 +125,7 @@ const heldOrderInput = z.object({
   items: z.array(cartItem).min(1),
 });
 
-export const returnItemSelection = z.array(z.object({ saleItemId: z.number().int().positive(), quantity: z.number().positive() })).max(1, "Choose only one item to return.");
+export const returnItemSelection = z.array(z.object({ saleItemId: z.number().int().positive(), quantity: z.number().positive() })).max(1, "Choose only one item to return."); const exchangeReplacementInput = z.object({ serviceId: z.number().int().positive().optional(), inventoryItemId: z.number().int().positive().optional(), quantity: z.number().positive().max(999) }).refine(item => Boolean(item.serviceId || item.inventoryItemId), "Choose a replacement product.");
 
 const returnInput = z.object({
   sessionId: z.number().int().positive().optional(),
@@ -131,9 +136,11 @@ const returnInput = z.object({
   reason: z.string().trim().max(2000).optional(),
   note: z.string().trim().max(2000).optional(),
   items: returnItemSelection.optional(),
+  replacementItem: exchangeReplacementInput.optional(),
 }).superRefine((value, ctx) => {
-  if (value.mode === "items" && (!value.items || value.items.length === 0)) ctx.addIssue({ code: "custom", path: ["items"], message: "Choose at least one item to return." });
+  if ((value.mode === "items" || value.mode === "exchange") && (!value.items || value.items.length === 0)) ctx.addIssue({ code: "custom", path: ["items"], message: "Choose at least one item to return." });
   if (value.mode === "amount" && (!value.amount || value.amount <= 0)) ctx.addIssue({ code: "custom", path: ["amount"], message: "Enter a refund amount." });
+  if (value.mode === "exchange" && !value.replacementItem) ctx.addIssue({ code: "custom", path: ["replacementItem"], message: "Choose a replacement product." });
 });
 
 async function validateSession(tx: any, sessionId: number) {
@@ -200,7 +207,7 @@ export const posRouter = router({
         name: item.name,
         category: item.category,
         description: `${item.unit} · direct inventory item`,
-        unitPrice: item.costPerUnit,
+        unitPrice: Number(item.salePrice) > 0 ? item.salePrice : item.costPerUnit,
         defaultFabricMeters: null,
         isActive: item.isActive,
         inventory: { id: item.id, code: item.code, name: item.name, quantity: item.quantity, unit: item.unit, isActive: item.isActive },
@@ -395,9 +402,10 @@ export const posRouter = router({
         if (!original) throw new TRPCError({ code: "NOT_FOUND", message: "The original sale was not found." });
         const originalItems = await tx.select().from(saleItems).where(eq(saleItems.saleId, original.id));
         const priorReturns = await tx.select().from(sales).where(eq(sales.returnOfSaleId, original.id));
-        const priorReturnIds = new Set(priorReturns.map(row => row.id));
+        const priorRefunds = priorReturns.filter(row => row.returnMode !== "exchange_replacement");
+        const priorReturnIds = new Set(priorRefunds.map(row => row.id));
         const priorReturnItems = (await tx.select().from(saleItems)).filter(item => priorReturnIds.has(item.saleId));
-        const lines = input.mode === "items" ? (input.items || []).map(request => {
+        const lines = input.mode === "items" || input.mode === "exchange" ? (input.items || []).map(request => {
           const source = originalItems.find(item => item.id === request.saleItemId);
           if (!source) throw new TRPCError({ code: "BAD_REQUEST", message: "A returned item does not belong to the original sale." });
           const alreadyReturned = priorReturnItems.filter(item => item.nameSnapshot === source.nameSnapshot).reduce((sum, item) => sum + Math.abs(Number(item.quantity)), 0);
@@ -406,18 +414,42 @@ export const posRouter = router({
           return { source, quantity: request.quantity, lineTotal: request.quantity * (Number(source.lineTotal) / originalQuantity) };
         }) : [];
         const originalGross = Math.max(0, Number(original.total));
-        const alreadyRefundedGross = priorReturns.reduce((sum, row) => sum + Math.abs(Number(row.total)), 0);
-        const requestedGross = input.mode === "amount" ? Number(input.amount || 0) : lines.reduce((sum, line) => sum + line.lineTotal, 0) * (1 + Number(original.vatRate || 0) / 100);
+        const alreadyRefundedGross = priorRefunds.reduce((sum, row) => sum + Math.abs(Number(row.total)), 0);
+        const vatRate = Number(original.vatRate || 0);
+        const requestedGross = input.mode === "amount" ? Number(input.amount || 0) : lines.reduce((sum, line) => sum + line.lineTotal, 0) * (1 + vatRate / 100);
         if (requestedGross <= 0) throw new TRPCError({ code: "BAD_REQUEST", message: "The refund amount must be greater than zero." });
         if (alreadyRefundedGross + requestedGross > originalGross + 0.001) throw new TRPCError({ code: "BAD_REQUEST", message: "The refund cannot exceed the remaining amount on the original sale." });
         if (input.mode === "amount" && !input.reason?.trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a reason for an amount-based refund." });
-        const vatRate = Number(original.vatRate || 0);
+        let replacement: { serviceId: number | null; inventoryItemId: number | null; name: string; quantity: number; unitPrice: number; stockPerSaleUnit: number; stock: any } | null = null;
+        if (input.mode === "exchange") {
+          const replacementInput = input.replacementItem;
+          if (!replacementInput) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a replacement product." });
+          if (replacementInput.serviceId) {
+            const service = (await tx.select().from(services).where(eq(services.id, replacementInput.serviceId)).limit(1))[0];
+            if (!service || !service.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "The replacement service is no longer active." });
+            const stock = service.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, service.inventoryItemId)).limit(1))[0] || null : null;
+            const stockPerSaleUnit = service.inventoryItemId ? Number(service.defaultFabricMeters || 1) : 0;
+            if (stock && Number(stock.quantity) + 0.001 < replacementInput.quantity * stockPerSaleUnit) throw new TRPCError({ code: "BAD_REQUEST", message: `Not enough stock for ${service.name}.` });
+            replacement = { serviceId: service.id, inventoryItemId: service.inventoryItemId || null, name: service.name, quantity: replacementInput.quantity, unitPrice: Number(service.unitPrice), stockPerSaleUnit, stock };
+          } else {
+            const stock = replacementInput.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, replacementInput.inventoryItemId)).limit(1))[0] || null : null;
+            if (!stock || !stock.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "The replacement inventory item is no longer active." });
+            const unitPrice = Number(stock.salePrice) > 0 ? Number(stock.salePrice) : Number(stock.costPerUnit);
+            if (unitPrice <= 0) throw new TRPCError({ code: "BAD_REQUEST", message: `Set a sale price for ${stock.name} before using it as an exchange replacement.` });
+            if (Number(stock.quantity) + 0.001 < replacementInput.quantity) throw new TRPCError({ code: "BAD_REQUEST", message: `Not enough stock for ${stock.name}.` });
+            replacement = { serviceId: null, inventoryItemId: stock.id, name: stock.name, quantity: replacementInput.quantity, unitPrice, stockPerSaleUnit: 1, stock };
+          }
+        }
+        const replacementNet = replacement ? replacement.quantity * replacement.unitPrice : 0;
+        const replacementGross = replacement ? replacementNet * (1 + vatRate / 100) : 0;
+        const settlement = calculateExchangeSettlement(requestedGross, replacementGross);
+        const settlementAmount = settlement.difference;
         const netTotal = input.mode === "amount" ? requestedGross / (1 + vatRate / 100) : lines.reduce((sum, line) => sum + line.lineTotal, 0);
         const vatAmount = requestedGross - netTotal;
         const saleNumber = `RET-${Date.now()}`;
         const saleResult = await tx.insert(sales).values({ saleNumber, customerId: original.customerId, customerNameSnapshot: original.customerNameSnapshot, customerPhoneSnapshot: original.customerPhoneSnapshot, subtotal: money(-netTotal), discount: "0.000", vatRate: money(vatRate), vatAmount: money(-vatAmount), total: money(-requestedGross), paidAmount: money(-requestedGross), paymentMethod: input.paymentMethod, paymentStatus: "paid", source: "counter", sessionId: resolvedSession.id, returnOfSaleId: original.id, returnMode: input.mode, returnReason: input.reason || input.note || null, createdBy: ctx.user.id }).returning({ id: sales.id });
         const saleId = Number(saleResult[0]?.id || 0);
-        if (input.mode === "items") for (const line of lines) {
+        if (input.mode === "items" || input.mode === "exchange") for (const line of lines) {
           await tx.insert(saleItems).values({ saleId, serviceId: line.source.serviceId, inventoryItemId: line.source.inventoryItemId, nameSnapshot: line.source.nameSnapshot, quantity: money(-line.quantity), unitPrice: money(Number(line.source.unitPrice)), lineDiscount: money(Number(line.source.lineDiscount)), lineTotal: money(-line.lineTotal), assignedTailorId: line.source.assignedTailorId, measurementProfileId: line.source.measurementProfileId });
           if (line.source.inventoryItemId) {
             const stock = (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, line.source.inventoryItemId)).limit(1))[0];
@@ -430,11 +462,29 @@ export const posRouter = router({
         } else {
           await tx.insert(saleItems).values({ saleId, serviceId: null, inventoryItemId: null, nameSnapshot: `Refund · ${input.reason}`, quantity: "1.000", unitPrice: money(netTotal), lineDiscount: "0.000", lineTotal: money(-netTotal), assignedTailorId: null, measurementProfileId: null });
         }
-        await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(-requestedGross), reference: `Refund of ${original.saleNumber}${input.reason ? ` · ${input.reason}` : ""}`, createdBy: ctx.user.id });
-        const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: "paid", notes: input.note || `${input.mode === "amount" ? "Amount refund" : "Item return"} of ${original.saleNumber}${input.reason ? ` · ${input.reason}` : ""}.` }).returning({ id: invoices.id });
-        return { saleId, invoiceId: Number(invoiceResult[0]?.id || 0), saleNumber, total: -requestedGross };
+        await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(-requestedGross), reference: `${input.mode === "exchange" ? "Exchange return" : "Refund"} of ${original.saleNumber}${input.reason ? ` · ${input.reason}` : ""}`, createdBy: ctx.user.id });
+        const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: "paid", notes: input.note || `${input.mode === "amount" ? "Amount refund" : input.mode === "exchange" ? "Exchange return" : "Item return"} of ${original.saleNumber}${input.reason ? ` · ${input.reason}` : ""}.` }).returning({ id: invoices.id });
+        let replacementSaleId: number | null = null;
+        let replacementInvoiceId: number | null = null;
+        if (replacement && input.mode === "exchange") {
+          const replacementSaleNumber = `EXC-${Date.now()}`;
+          const replacementSaleResult = await tx.insert(sales).values({ saleNumber: replacementSaleNumber, customerId: original.customerId, customerNameSnapshot: original.customerNameSnapshot, customerPhoneSnapshot: original.customerPhoneSnapshot, subtotal: money(replacementNet), discount: "0.000", vatRate: money(vatRate), vatAmount: money(replacementGross - replacementNet), total: money(replacementGross), paidAmount: money(replacementGross), paymentMethod: input.paymentMethod, paymentStatus: "paid", source: "counter", sessionId: resolvedSession.id, returnOfSaleId: original.id, returnMode: "exchange_replacement", returnReason: `Replacement for ${original.saleNumber}`, createdBy: ctx.user.id }).returning({ id: sales.id });
+          replacementSaleId = Number(replacementSaleResult[0]?.id || 0);
+          await tx.insert(saleItems).values({ saleId: replacementSaleId, serviceId: replacement.serviceId, inventoryItemId: replacement.inventoryItemId, nameSnapshot: replacement.name, quantity: money(replacement.quantity), unitPrice: money(replacement.unitPrice), lineDiscount: "0.000", lineTotal: money(replacementNet), assignedTailorId: null, measurementProfileId: null });
+          if (replacement.stock && replacement.inventoryItemId) {
+            const before = Number(replacement.stock.quantity);
+            const after = before - replacement.quantity * replacement.stockPerSaleUnit;
+            await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq(inventoryItems.id, replacement.inventoryItemId));
+            await tx.insert(stockMovements).values({ inventoryItemId: replacement.inventoryItemId, movementType: "sale", quantityChange: money(-replacement.quantity * replacement.stockPerSaleUnit), quantityBefore: money(before), quantityAfter: money(after), referenceType: "exchange", referenceId: replacementSaleId, createdBy: ctx.user.id, notes: `${replacementSaleNumber} · replacement for ${original.saleNumber}` });
+          }
+          await tx.insert(posPayments).values({ saleId: replacementSaleId, method: input.paymentMethod, amount: money(requestedGross), reference: `Exchange credit from ${original.saleNumber}`, createdBy: ctx.user.id });
+          if (Math.abs(settlementAmount) > 0.0005) await tx.insert(posPayments).values({ saleId: replacementSaleId, method: input.paymentMethod, amount: money(settlementAmount), reference: settlementAmount > 0 ? `Exchange balance due from ${original.saleNumber}` : `Exchange refund to original ${original.saleNumber}`, createdBy: ctx.user.id });
+          const replacementInvoiceResult = await tx.insert(invoices).values({ saleId: replacementSaleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(replacementSaleId).padStart(6, "0")}`, status: "paid", notes: `Replacement item for exchange ${original.saleNumber}. ${settlementAmount > 0 ? `Balance collected: ${money(settlementAmount)}.` : settlementAmount < 0 ? `Refund issued: ${money(Math.abs(settlementAmount))}.` : "No balance due."}` }).returning({ id: invoices.id });
+          replacementInvoiceId = Number(replacementInvoiceResult[0]?.id || 0);
+        }
+        return { saleId, invoiceId: Number(invoiceResult[0]?.id || 0), saleNumber, total: input.mode === "exchange" ? settlementAmount : -requestedGross, replacementSaleId, replacementInvoiceId, settlementAmount: input.mode === "exchange" ? settlementAmount : null };
       });
-      await audit(ctx.user.id, "POS_RETURN_COMPLETED", "sale", result.saleId, { originalSaleId: input.originalSaleId, total: result.total });
+      await audit(ctx.user.id, input.mode === "exchange" ? "POS_EXCHANGE_COMPLETED" : "POS_RETURN_COMPLETED", "sale", result.saleId, { originalSaleId: input.originalSaleId, total: result.total, replacementSaleId: result.replacementSaleId, settlementAmount: result.settlementAmount });
       return result;
     }),
   }),
