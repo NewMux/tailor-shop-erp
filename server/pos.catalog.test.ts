@@ -5,6 +5,7 @@ vi.mock("./db", () => ({ getDb: mocked.getDb }));
 
 import { posRouter } from "./pos";
 import { getPosAvailabilityLabel, getPosCustomerId, getPosCustomerLabel, getPosLineKey } from "../client/src/lib/posCatalog";
+import { getTranslationSource } from "../client/src/lib/translation";
 
 const query = (rows: unknown[]) => {
   const chain = {
@@ -31,6 +32,12 @@ describe("pos.catalog", () => {
     expect(getPosCustomerLabel(selected)).toBe("Mohammed Ahmed");
     expect(getPosCustomerId(null)).toBe("");
     expect(getPosCustomerLabel(null)).toBe("Walk-in customer");
+  });
+
+  it("preserves React-updated text instead of reverting it to the previous translation", () => {
+    expect(getTranslationSource("Ali", "Walk-in customer", "عميل حاضر")).toBe("Ali");
+    expect(getTranslationSource("عميل حاضر", "Walk-in customer", "عميل حاضر")).toBe("Walk-in customer");
+    expect(getTranslationSource("1 item in order", undefined, undefined)).toBe("1 item in order");
   });
 
   it("uses stable keys when adding catalog products to the cart", () => {

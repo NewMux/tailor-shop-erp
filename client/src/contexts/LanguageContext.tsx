@@ -1,9 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { getTranslationSource } from "@/lib/translation";
 
 type Language = "en" | "ar";
 
 const STORAGE_KEY = "al-hussam-language";
 const ORIGINAL_TEXT = new WeakMap<Text, string>();
+const LAST_TRANSLATED_TEXT = new WeakMap<Text, string>();
 
 const ARABIC_COPY: Record<string, string> = {
   "Overview": "نظرة عامة",
@@ -802,7 +804,8 @@ function translateDocument(language: Language) {
   textNodes.forEach(textNode => {
     const parent = textNode.parentElement;
     if (!parent || parent.closest("[data-no-translate]") || ["SCRIPT", "STYLE", "NOSCRIPT"].includes(parent.tagName)) return;
-    const original = ORIGINAL_TEXT.get(textNode) || textNode.nodeValue || "";
+    const current = textNode.nodeValue || "";
+    const original = getTranslationSource(current, ORIGINAL_TEXT.get(textNode), LAST_TRANSLATED_TEXT.get(textNode));
     ORIGINAL_TEXT.set(textNode, original);
     const siblings = parent ? Array.from(parent.childNodes) : [];
     const siblingIndex = siblings.indexOf(textNode);
@@ -811,7 +814,9 @@ function translateDocument(language: Language) {
     const quantity = /^\d+(?:\.\d+)?$/.test(previousOriginal) ? Number(previousOriginal) : undefined;
     const splitCountSuffixes = new Set(["items in order", "units sold", "sales", "sale", "units"]);
     if (language === "ar" && quantity !== undefined && previousNode && splitCountSuffixes.has(original.trim())) previousNode.nodeValue = "";
-    textNode.nodeValue = translateCopy(original, language, { quantity });
+    const translated = translateCopy(original, language, { quantity });
+    textNode.nodeValue = translated;
+    LAST_TRANSLATED_TEXT.set(textNode, translated);
   });
   document.querySelectorAll<HTMLElement>("input[placeholder], textarea[placeholder], [aria-label], [title]").forEach(element => {
     ["placeholder", "aria-label", "title"].forEach(attribute => {
