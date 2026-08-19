@@ -9,7 +9,7 @@ const adminRoles: BusinessRole[] = ["admin"]; const salesRoles: BusinessRole[] =
 export const customPermissionValues = ["dashboard", "customers", "sales", "inventory", "payroll", "production"] as const;
 export type CustomPermission = (typeof customPermissionValues)[number];
 const legacyPermissions: Record<BusinessRole, CustomPermission[]> = { admin: ["dashboard", "customers", "sales", "inventory", "payroll", "production"], sales: ["dashboard", "customers", "sales"], tailor: ["customers", "production"], inventory: ["inventory"], payroll: ["payroll"] };
-export const customRoleCanAccess = (permissions: string[], allowed: BusinessRole[]) => allowed.some(role => legacyPermissions[role].some(permission => permissions.includes(permission)));
+export const customRoleCanAccess = (permissions: string[], allowed: BusinessRole[]) => allowed.filter(role => role !== "admin").some(role => legacyPermissions[role].some(permission => permissions.includes(permission)));
 const three = (value: number) => value.toFixed(3); const id = (result: unknown) => { const row = Array.isArray(result) ? result[0] : result; return Number((row as { id?: number })?.id || 0); };
 const dashboardRange = z.enum(["today", "7d", "30d", "90d", "all", "custom"]);
 export const getDashboardRangeStart = (range: z.infer<typeof dashboardRange>, now = new Date()) => { const start = new Date(now); if (range === "all") return null; if (range === "today") { start.setHours(0, 0, 0, 0); return start; } if (range === "7d") start.setDate(start.getDate() - 6); if (range === "30d") start.setDate(start.getDate() - 29); if (range === "90d") start.setDate(start.getDate() - 89); start.setHours(0, 0, 0, 0); return start; };

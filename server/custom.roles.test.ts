@@ -12,4 +12,12 @@ describe("owner-managed role permissions", () => {
     expect(customRoleCanAccess(["sales"], ["sales"])).toBe(true);
     expect(customRoleCanAccess(["inventory"], ["sales"])).toBe(false);
   });
+
+  it("does not let a dashboard-only role into inventory routes", () => {
+    expect(customRoleCanAccess(["dashboard"], ["admin", "inventory"])).toBe(false);
+  });
+
+  it("does not let a dashboard-only role into payroll routes", () => {
+    expect(customRoleCanAccess(["dashboard"], ["admin", "payroll"])).toBe(false);
+  });
 });
