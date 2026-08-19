@@ -15,6 +15,13 @@
       "when": 1786773407993,
       "tag": "0001_pos_domain",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787127028612,
+      "tag": "0003_inventory_roll_tracking",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { auditLogs, customers, customRoles, discountCodes, inventoryItems, invoices, measurementProfiles, posOrders, posPayments, posSessions, saleItems, sales, services, shopSettings, staffProfiles, stockMovements, tailoringOrders, userBusinessRoles, userCustomRoles } from "../drizzle/schema";
@@ -95,7 +95,7 @@ const quickCheckoutInput = z.object({
 });
 
 const tailoringCheckoutInput = z.object({
-  sessionId: z.number().int().positive(),
+  sessionId: z.number().int().positive().optional(),
   customerId: z.number().int().positive(),
   measurementProfileId: z.number().int().positive(),
   assignedTailorId: z.number().int().positive(),
@@ -123,7 +123,7 @@ const heldOrderInput = z.object({
 export const returnItemSelection = z.array(z.object({ saleItemId: z.number().int().positive(), quantity: z.number().positive() })).max(1, "Choose only one item to return.");
 
 const returnInput = z.object({
-  sessionId: z.number().int().positive(),
+  sessionId: z.number().int().positive().optional(),
   originalSaleId: z.number().int().positive(),
   paymentMethod,
   mode: returnMode.default("items"),
@@ -342,14 +342,7 @@ export const posRouter = router({
     return { id: checkout.saleId, invoiceId: checkout.invoiceId, total: checkout.total, paidAmount: checkout.paidAmount, paymentStatus: checkout.paymentStatus, saleNumber };
   }),
   returns: router({
-    lookup: protectedProcedure.input(z.object({ saleNumber: z.string().trim().min(1).max(60) })).query(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
-      const db = await dbOrThrow();
-      const sale = (await db.select().from(sales).where(eq(sales.saleNumber, input.saleNumber)).limit(1))[0];
-      if (!sale || sale.returnOfSaleId) return null;
-      const items = await db.select().from(saleItems).where(eq(saleItems.saleId, sale.id));
-      return { sale, items };
-    }),
+    lookup: protectedProcedure.input(z.object({ saleNumber: z.string().trim().min(1).max(160), search: z.string().trim().min(1).max(160).optional() })).query(async ({ ctx, input }) => { await requireCounterAccess(ctx.user.id, ctx.user.role); const db = await dbOrThrow(); const term = (input.search || input.saleNumber).trim(); const exact = (await db.select().from(sales).where(eq(sales.saleNumber, term)).limit(1))[0]; const sale = exact || (await db.select().from(sales).where(and(or(like(sales.saleNumber, `%${term}%`), like(sales.customerNameSnapshot, `%${term}%`), like(sales.customerPhoneSnapshot, `%${term}%`)), sql`${sales.returnOfSaleId} is null`)).orderBy(desc(sales.createdAt)).limit(1))[0]; if (!sale || sale.returnOfSaleId) return null; const items = await db.select().from(saleItems).where(eq(saleItems.saleId, sale.id)); return { sale, items }; }),
     create: protectedProcedure.input(returnInput).mutation(async ({ ctx, input }) => {
       await requireCounterAccess(ctx.user.id, ctx.user.role);
       const db = await dbOrThrow();
@@ -388,8 +381,7 @@ export const posRouter = router({
             const stock = (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, line.source.inventoryItemId)).limit(1))[0];
             if (stock) {
               const before = Number(stock.quantity);
-              const after = before + line.quantity;
-              await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq(inventoryItems.id, stock.id));
+              const stockPerSaleUnit = line.source.serviceId ? Number((await tx.select({ defaultFabricMeters: services.defaultFabricMeters }).from(services).where(eq(services.id, line.source.serviceId)).limit(1))[0]?.defaultFabricMeters || 1) : 1; const after = before + line.quantity * stockPerSaleUnit; await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq(inventoryItems.id, stock.id));
               await tx.insert(stockMovements).values({ inventoryItemId: stock.id, movementType: "return", quantityChange: money(line.quantity), quantityBefore: money(before), quantityAfter: money(after), referenceType: "sale", referenceId: saleId, createdBy: ctx.user.id, notes: `${saleNumber} · return of ${original.saleNumber}` });
             }
           }
@@ -422,7 +414,7 @@ export const posRouter = router({
       if (!tailor?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active tailor for this production order." });
       const orderResult = await tx.insert(tailoringOrders).values({ orderNumber, customerId: customer.id, measurementProfileId: measurement.id, assignedTailorId: tailor.id, garmentType: input.garmentType, quantity: input.quantity, dueDate: input.dueDate ? new Date(input.dueDate) : null, price: money(input.orderPrice), customerSuppliedFabric: input.customerSuppliedFabric, fabricNotes: input.fabricNotes || null, status: "confirmed", notes: input.notes || null, productionNotes: input.productionNotes || null, createdBy: ctx.user.id }).returning({ id: tailoringOrders.id });
       const orderId = Number(orderResult[0]?.id || 0);
-      const saleResult = await tx.insert(sales).values({ saleNumber, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(paymentTax.netAmount), discount: "0.000", vatRate: money(paymentTax.vatRate), vatAmount: money(paymentTax.vatAmount), total: money(input.paymentAmount), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: input.sessionId, createdBy: ctx.user.id }).returning({ id: sales.id });
+      const saleResult = await tx.insert(sales).values({ saleNumber, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(paymentTax.netAmount), discount: "0.000", vatRate: money(paymentTax.vatRate), vatAmount: money(paymentTax.vatAmount), total: money(input.paymentAmount), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: resolvedSession.id, createdBy: ctx.user.id }).returning({ id: sales.id });
       const saleId = Number(saleResult[0]?.id || 0);
       await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(input.paymentAmount), reference: `${orderNumber} initial payment`, createdBy: ctx.user.id });
       await tx.insert(saleItems).values({ saleId, serviceId: null, inventoryItemId: null, nameSnapshot: `${input.garmentType} tailoring order · ${paymentStatus === "paid" ? "full payment" : "deposit"}`, quantity: "1.000", unitPrice: money(paymentTax.netAmount), lineDiscount: "0.000", lineTotal: money(paymentTax.netAmount), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
