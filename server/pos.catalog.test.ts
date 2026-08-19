@@ -4,7 +4,7 @@ const mocked = vi.hoisted(() => ({ getDb: vi.fn() }));
 vi.mock("./db", () => ({ getDb: mocked.getDb }));
 
 import { posRouter } from "./pos";
-import { getPosAvailabilityLabel } from "../client/src/lib/posCatalog";
+import { getPosAvailabilityLabel, getPosCustomerLabel } from "../client/src/lib/posCatalog";
 
 const query = (rows: unknown[]) => {
   const chain = {
@@ -23,6 +23,12 @@ describe("pos.catalog", () => {
   it("renders a service label for standalone services instead of a synthetic stock quantity", () => {
     expect(getPosAvailabilityLabel(false, 999999, "unit")).toBe("Service");
     expect(getPosAvailabilityLabel(true, 12.5, "Meters")).toBe("12.50 Meters");
+  });
+
+  it("uses the selected customer name and only falls back to Walk-in when no customer is attached", () => {
+    expect(getPosCustomerLabel({ name: "Mohammed Ahmed" })).toBe("Mohammed Ahmed");
+    expect(getPosCustomerLabel({ name: "  " })).toBe("Walk-in customer");
+    expect(getPosCustomerLabel(null)).toBe("Walk-in customer");
   });
 
   it("returns active services and unlinked inventory as unique POS products", async () => {
