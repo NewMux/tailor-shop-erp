@@ -113,8 +113,9 @@ describe("pos.checkout", () => {
       [{ id: 7, name: "[DEMO] Khalid Tailor", isActive: true }],
     ];
     const transactionDb = {
-      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { writes.push(value); const insertIds = [811, 712, 900, 901, 43]; return { returning: () => [{ id: insertIds[writes.length - 1] }] }; }) })),
+      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { writes.push(value); const insertIds = [811, 712, 900, 901, 902, 43]; return { returning: () => [{ id: insertIds[writes.length - 1] }] }; }) })),
       select: vi.fn(() => query(transactionResponses.shift() || [])),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
     };
     const rootResponses = [[{ userId: 1, role: "admin", isActive: true }], [{ invoicePrefix: "POS" }]];
     const rootDb = {
@@ -140,13 +141,42 @@ describe("pos.checkout", () => {
       productionNotes: "[DEMO] Begin after fabric selection.",
     });
 
-    expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 43, total: 20, paymentStatus: "partial" });
+    expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902, total: 20, paymentStatus: "partial" });
     expect(writes).toHaveLength(5);
     expect(writes[0]).toMatchObject({ customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", status: "confirmed", price: "45.000" });
     expect(writes[1]).toMatchObject({ customerId: 44, subtotal: "20.000", total: "20.000", paymentStatus: "partial" });
     expect(writes[2]).toMatchObject({ saleId: 712, method: "benefitpay", amount: "20.000" });
     expect(writes[3]).toMatchObject({ saleId: 712, serviceId: null, inventoryItemId: null, assignedTailorId: 7, measurementProfileId: 9, lineTotal: "20.000" });
     expect(writes[4]).toMatchObject({ saleId: 712, invoiceNumber: "POS-000712", status: "partial" });
+  });
+
+  it("links a catalog tailoring service to the production sale and deducts linked shop fabric", async () => {
+    const writes: unknown[] = [];
+    const stockUpdates: unknown[] = [];
+    const transactionResponses = [
+      [{ id: 1, status: "open" }],
+      [{ id: 44, name: "[DEMO] Ahmed Al-Hassan", phone: "+973 3330 0011" }],
+      [{ id: 9, customerId: 44, version: 1 }],
+      [{ id: 7, name: "[DEMO] Khalid Tailor", isActive: true }],
+      [{ id: 4, name: "[DEMO] Thobe service", inventoryItemId: 81, defaultFabricMeters: "2.000", isActive: true }],
+      [{ id: 81, name: "[DEMO] Navy cotton", quantity: "4.000", unit: "Meters", isActive: true }],
+    ];
+    const transactionDb = {
+      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { writes.push(value); const insertIds = [811, 712, 900, 901, 902, 43]; return { returning: () => [{ id: insertIds[writes.length - 1] }] }; }) })),
+      select: vi.fn(() => query(transactionResponses.shift() || [])),
+      update: vi.fn(() => ({ set: vi.fn((value: unknown) => { stockUpdates.push(value); return { where: vi.fn() }; }) })),
+    };
+    const rootResponses = [[{ userId: 1, role: "admin", isActive: true }], [{ invoicePrefix: "POS" }]];
+    const rootDb = { select: vi.fn(() => query(rootResponses.shift() || [])), insert: vi.fn(() => ({ values: vi.fn() })), transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)) };
+    mocked.getDb.mockResolvedValue(rootDb);
+    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+
+    const result = await caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, serviceId: 4, garmentType: "Thoub", quantity: 1, dueDate: "2026-09-01", orderPrice: 45, paymentAmount: 20, paymentMethod: "benefitpay", notes: "[DEMO] Connected service order", productionNotes: "[DEMO] Deduct shop fabric." });
+
+    expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 43 });
+    expect(writes[3]).toMatchObject({ saleId: 712, serviceId: 4, inventoryItemId: 81, assignedTailorId: 7, measurementProfileId: 9, quantity: "1.000", lineTotal: "20.000" });
+    expect(stockUpdates).toEqual([{ saleId: 712 }, { quantity: "2.000" }]);
+    expect(writes[4]).toMatchObject({ inventoryItemId: 81, movementType: "sale", referenceType: "tailoring_order", referenceId: 811, quantityChange: "-2.000", quantityAfter: "2.000" });
   });
 
   it("rejects a tailoring payment that exceeds the quoted order price before creating records", async () => {

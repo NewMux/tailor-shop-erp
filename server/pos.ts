@@ -104,6 +104,7 @@ const tailoringCheckoutInput = z.object({
   customerId: z.number().int().positive(),
   measurementProfileId: z.number().int().positive(),
   assignedTailorId: z.number().int().positive(),
+  serviceId: z.number().int().positive().optional(),
   garmentType: z.string().trim().min(2).max(80),
   quantity: z.number().int().min(1).max(20),
   dueDate: z.string().optional(),
@@ -504,12 +505,24 @@ export const posRouter = router({
       if (!measurement || measurement.customerId !== customer.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a saved measurement version belonging to this customer." });
       const tailor = (await tx.select().from(staffProfiles).where(eq(staffProfiles.id, input.assignedTailorId)).limit(1))[0];
       if (!tailor?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active tailor for this production order." });
+      const service = input.serviceId ? (await tx.select().from(services).where(eq(services.id, input.serviceId)).limit(1))[0] : null;
+      if (input.serviceId && (!service || !service.isActive)) throw new TRPCError({ code: "BAD_REQUEST", message: "The selected tailoring service is no longer available." });
+      const linkedStock = service?.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, service.inventoryItemId)).limit(1))[0] : null;
+      if (service?.inventoryItemId && !linkedStock?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "The selected tailoring service has no active material link." });
+      const stockPerPiece = service?.inventoryItemId ? Number(service.defaultFabricMeters || 1) : 0;
+      const stockNeeded = input.quantity * stockPerPiece;
+      if (!input.customerSuppliedFabric && linkedStock && Number(linkedStock.quantity) < stockNeeded) throw new TRPCError({ code: "BAD_REQUEST", message: `${linkedStock.name} does not have enough stock for this tailoring order.` });
       const orderResult = await tx.insert(tailoringOrders).values({ orderNumber, customerId: customer.id, measurementProfileId: measurement.id, assignedTailorId: tailor.id, garmentType: input.garmentType, quantity: input.quantity, dueDate: input.dueDate ? new Date(input.dueDate) : null, price: money(input.orderPrice), customerSuppliedFabric: input.customerSuppliedFabric, fabricNotes: input.fabricNotes || null, status: "confirmed", notes: input.notes || null, productionNotes: input.productionNotes || null, createdBy: ctx.user.id }).returning({ id: tailoringOrders.id });
       const orderId = Number(orderResult[0]?.id || 0);
       const saleResult = await tx.insert(sales).values({ saleNumber, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(paymentTax.netAmount), discount: "0.000", vatRate: money(paymentTax.vatRate), vatAmount: money(paymentTax.vatAmount), total: money(input.paymentAmount), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: resolvedSession.id, createdBy: ctx.user.id }).returning({ id: sales.id });
-      const saleId = Number(saleResult[0]?.id || 0);
-      await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(input.paymentAmount), reference: `${orderNumber} initial payment`, createdBy: ctx.user.id });
-      await tx.insert(saleItems).values({ saleId, serviceId: null, inventoryItemId: null, nameSnapshot: `${input.garmentType} tailoring order · ${paymentStatus === "paid" ? "full payment" : "deposit"}`, quantity: "1.000", unitPrice: money(paymentTax.netAmount), lineDiscount: "0.000", lineTotal: money(paymentTax.netAmount), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
+      const saleId = Number(saleResult[0]?.id || 0); await tx.update(tailoringOrders).set({ saleId }).where(eq(tailoringOrders.id, orderId)); await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(input.paymentAmount), reference: `${orderNumber} initial payment`, createdBy: ctx.user.id });
+      await tx.insert(saleItems).values({ saleId, serviceId: service?.id || null, inventoryItemId: linkedStock?.id || null, nameSnapshot: `${service?.name || input.garmentType} tailoring order · ${paymentStatus === "paid" ? "full payment" : "deposit"}`, quantity: money(input.quantity), unitPrice: money(paymentTax.netAmount / input.quantity), lineDiscount: "0.000", lineTotal: money(paymentTax.netAmount), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
+      if (!input.customerSuppliedFabric && linkedStock && stockNeeded > 0) {
+        const before = Number(linkedStock.quantity);
+        const after = before - stockNeeded;
+        await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq(inventoryItems.id, linkedStock.id));
+        await tx.insert(stockMovements).values({ inventoryItemId: linkedStock.id, movementType: "sale", quantityChange: money(-stockNeeded), quantityBefore: money(before), quantityAfter: money(after), referenceType: "tailoring_order", referenceId: orderId, createdBy: ctx.user.id, notes: `${orderNumber} · ${money(stockPerPiece)} ${linkedStock.unit} per piece` });
+      }
       const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: paymentStatus, notes: `${orderNumber} · ${input.garmentType} · quoted ${money(input.orderPrice)} BHD incl. VAT · ${paymentStatus === "paid" ? "full payment" : "deposit"} collected from POS.${input.customerSuppliedFabric ? " Customer supplied fabric." : " Shop fabric."}` }).returning({ id: invoices.id });
       return { orderId, saleId, invoiceId: Number(invoiceResult[0]?.id || 0) };
     });
