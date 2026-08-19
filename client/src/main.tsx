@@ -9,7 +9,18 @@ import "./index.css";
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(error => console.warn("Offline shell unavailable", error));
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    navigator.serviceWorker.register("/sw.js").then(registration => {
+      void registration.update();
+      if (hadController) {
+        let reloaded = false;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (reloaded) return;
+          reloaded = true;
+          window.location.reload();
+        });
+      }
+    }).catch(error => console.warn("Offline shell unavailable", error));
   });
 }
 

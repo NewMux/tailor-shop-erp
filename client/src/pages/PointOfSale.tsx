@@ -3,7 +3,7 @@ import { Archive, ArrowLeft, ArrowRight, BadgePercent, Banknote, Check, CheckCir
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { writeInvoiceToPrintWindow } from "@/lib/invoicePrint";
-import { getPosAvailabilityLabel, getPosCustomerLabel } from "@/lib/posCatalog";
+import { getPosAvailabilityLabel, getPosCustomerId, getPosCustomerLabel, getPosLineKey } from "@/lib/posCatalog";
 import { enqueueOfflineSale, readOfflineSnapshot, saveOfflineSnapshot } from "@/lib/offlineSalesQueue";
 import { Button } from "@/components/ui/button";
 import { useOfflineSync } from "@/contexts/OfflineSyncContext";
@@ -39,8 +39,8 @@ export default function PointOfSale() {
   const [registerScreen, setRegisterScreen] = useState<RegisterScreen>("catalog");
   const [cart, setCart] = useState<CartLine[]>([]);
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
-  const [customerId, setCustomerId] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
+  const customerId = getPosCustomerId(selectedCustomer);
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
   const [heldOrdersOpen, setHeldOrdersOpen] = useState(false);
@@ -249,7 +249,7 @@ export default function PointOfSale() {
 
   const updateLine = (lineKey: string, patch: Partial<CartLine>) => setCart(current => current.map(line => line.lineKey === lineKey ? { ...line, ...patch } : line));
   const add = (item: (typeof catalogItems)[number]) => setCart(current => {
-    const lineKey = item.catalogKey;
+    const lineKey = getPosLineKey(item);
     const existing = current.find(line => line.lineKey === lineKey);
     const available = Number(item.quantity);
     const nextQuantity = (existing?.quantity || 0) + 1;
@@ -289,7 +289,7 @@ export default function PointOfSale() {
     if (!Number.isFinite(parsed)) return;
     setCart(current => current.map(line => line.lineKey === lineKey ? { ...line, discountPercent: parsed, lineDiscount: line.price * line.quantity * parsed / 100 } : line));
   };
-  const chooseCustomer = (customer: CustomerOption | null) => { setCustomerId(customer ? String(customer.id) : ""); setSelectedCustomer(customer); setMeasurementProfileId(""); setCustomerSearch(""); setCustomerPickerOpen(false); toast.success(customer ? `${customer.name} attached to this sale.` : "Walk-in customer selected."); };
+  const chooseCustomer = (customer: CustomerOption | null) => { setSelectedCustomer(customer); setMeasurementProfileId(""); setCustomerSearch(""); setCustomerPickerOpen(false); toast.success(customer ? `${customer.name} attached to this sale.` : "Walk-in customer selected."); };
   const loadHeldOrder = (order: NonNullable<typeof heldOrders.data>[number]) => {
     const raw = order.cartJson as unknown;
     const storedItems = Array.isArray(raw) ? raw : (raw && typeof raw === "object" && "items" in raw && Array.isArray((raw as { items?: unknown }).items) ? (raw as { items: unknown[] }).items : []);

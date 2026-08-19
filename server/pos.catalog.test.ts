@@ -4,7 +4,7 @@ const mocked = vi.hoisted(() => ({ getDb: vi.fn() }));
 vi.mock("./db", () => ({ getDb: mocked.getDb }));
 
 import { posRouter } from "./pos";
-import { getPosAvailabilityLabel, getPosCustomerLabel } from "../client/src/lib/posCatalog";
+import { getPosAvailabilityLabel, getPosCustomerId, getPosCustomerLabel, getPosLineKey } from "../client/src/lib/posCatalog";
 
 const query = (rows: unknown[]) => {
   const chain = {
@@ -25,10 +25,18 @@ describe("pos.catalog", () => {
     expect(getPosAvailabilityLabel(true, 12.5, "Meters")).toBe("12.50 Meters");
   });
 
-  it("uses the selected customer name and only falls back to Walk-in when no customer is attached", () => {
-    expect(getPosCustomerLabel({ name: "Mohammed Ahmed" })).toBe("Mohammed Ahmed");
-    expect(getPosCustomerLabel({ name: "  " })).toBe("Walk-in customer");
+  it("uses one canonical customer selection for the id and visible label", () => {
+    const selected = { id: 17, name: "Mohammed Ahmed" };
+    expect(getPosCustomerId(selected)).toBe("17");
+    expect(getPosCustomerLabel(selected)).toBe("Mohammed Ahmed");
+    expect(getPosCustomerId(null)).toBe("");
     expect(getPosCustomerLabel(null)).toBe("Walk-in customer");
+  });
+
+  it("uses stable keys when adding catalog products to the cart", () => {
+    expect(getPosLineKey({ catalogKey: "inventory:82", sourceLabel: "Inventory", inventoryItemId: 82, id: 82 })).toBe("inventory:82");
+    expect(getPosLineKey({ sourceLabel: "Inventory", inventoryItemId: 82, id: 82 })).toBe("inventory:82");
+    expect(getPosLineKey({ sourceLabel: "Service", serviceId: 4, id: 4 })).toBe("service:4");
   });
 
   it("returns active services and unlinked inventory as unique POS products", async () => {

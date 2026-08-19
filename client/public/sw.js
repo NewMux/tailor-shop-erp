@@ -1,4 +1,4 @@
-const SHELL_CACHE = "tailor-erp-mobile-shell-v3";
+const SHELL_CACHE = "tailor-erp-mobile-shell-v4";
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -36,6 +36,24 @@ self.addEventListener("fetch", event => {
           return response;
         })
         .catch(() => caches.match(request).then(cached => cached || caches.match("/index.html") || caches.match("/"))),
+    );
+    return;
+  }
+
+  const isApplicationAsset = request.destination === "script"
+    || request.destination === "style"
+    || request.destination === "font"
+    || url.pathname.endsWith(".js")
+    || url.pathname.endsWith(".css");
+
+  if (isApplicationAsset) {
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          if (response.ok) caches.open(SHELL_CACHE).then(cache => cache.put(request, response.clone()));
+          return response;
+        })
+        .catch(() => caches.match(request)),
     );
     return;
   }
