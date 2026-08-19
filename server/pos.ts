@@ -166,6 +166,48 @@ async function resolveDiscount(tx: any, code: string | undefined, subtotal: numb
 }
 
 export const posRouter = router({
+  catalog: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      const db = await dbOrThrow();
+      const [serviceRows, inventoryRows] = await Promise.all([
+        db.select({ service: services, inventory: inventoryItems }).from(services).leftJoin(inventoryItems, eq(services.inventoryItemId, inventoryItems.id)).where(eq(services.isActive, true)).orderBy(services.name),
+        db.select().from(inventoryItems).where(eq(inventoryItems.isActive, true)).orderBy(inventoryItems.name),
+      ]);
+      const linkedInventoryIds = new Set(serviceRows.map(row => row.inventory?.id).filter((value): value is number => Boolean(value)));
+      const serviceCatalog = serviceRows.map(({ service, inventory }) => ({
+        id: service.id,
+        catalogKey: `service:${service.id}`,
+        kind: "service" as const,
+        serviceId: service.id,
+        inventoryItemId: inventory?.id || null,
+        sku: service.sku,
+        name: service.name,
+        category: service.category,
+        description: service.description || "",
+        unitPrice: service.unitPrice,
+        defaultFabricMeters: service.defaultFabricMeters || null,
+        isActive: service.isActive,
+        inventory: inventory?.id ? { id: inventory.id, code: inventory.code, name: inventory.name, quantity: inventory.quantity, unit: inventory.unit, isActive: inventory.isActive } : null,
+      }));
+      const inventoryCatalog = inventoryRows.filter(item => !linkedInventoryIds.has(item.id)).map(item => ({
+        id: item.id,
+        catalogKey: `inventory:${item.id}`,
+        kind: "inventory" as const,
+        serviceId: null,
+        inventoryItemId: item.id,
+        sku: item.code,
+        name: item.name,
+        category: item.category,
+        description: `${item.unit} · direct inventory item`,
+        unitPrice: item.costPerUnit,
+        defaultFabricMeters: null,
+        isActive: item.isActive,
+        inventory: { id: item.id, code: item.code, name: item.name, quantity: item.quantity, unit: item.unit, isActive: item.isActive },
+      }));
+      return [...serviceCatalog, ...inventoryCatalog];
+    }),
+  }),
   session: router({
     current: protectedProcedure.query(async ({ ctx }) => {
       await requireCounterAccess(ctx.user.id, ctx.user.role);
