@@ -4,6 +4,7 @@ const mocked = vi.hoisted(() => ({ getDb: vi.fn() }));
 vi.mock("./db", () => ({ getDb: mocked.getDb }));
 
 import { posRouter } from "./pos";
+import { getPosAvailabilityLabel } from "../client/src/lib/posCatalog";
 
 const query = (rows: unknown[]) => {
   const chain = {
@@ -18,6 +19,11 @@ const query = (rows: unknown[]) => {
 
 describe("pos.catalog", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("renders a service label for standalone services instead of a synthetic stock quantity", () => {
+    expect(getPosAvailabilityLabel(false, 999999, "unit")).toBe("Service");
+    expect(getPosAvailabilityLabel(true, 12.5, "Meters")).toBe("12.50 Meters");
+  });
 
   it("returns active services and unlinked inventory as unique POS products", async () => {
     const serviceRows = [{

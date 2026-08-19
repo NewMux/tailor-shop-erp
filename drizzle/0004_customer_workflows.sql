@@ -1,5 +1,6 @@
 ALTER TABLE "shopSettings" ADD COLUMN IF NOT EXISTS "invoiceTerms" text;
 ALTER TABLE "inventoryItems" ADD COLUMN IF NOT EXISTS "inventoryType" text NOT NULL DEFAULT 'material';
+ALTER TABLE "inventoryItems" ADD COLUMN IF NOT EXISTS "size" varchar(60);
 ALTER TABLE "inventoryItems" ADD COLUMN IF NOT EXISTS "salePrice" numeric(12,3) NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS "staffDocuments" (
   "id" serial PRIMARY KEY,
