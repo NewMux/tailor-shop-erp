@@ -38,7 +38,7 @@ function ConnectionStatus() {
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user, loading, isAuthenticated, logout } = useAuth();
+  const { user, loading, isAuthenticated, logout, callbackError } = useAuth();
   const { isArabic, t, toggleLanguage } = useLanguage();
   const [location] = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
@@ -47,7 +47,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const moreItems = navigation.filter(item => !mobileNavigation.some(primary => primary.path === item.path));
 
   if (loading) return <div className="flex min-h-screen items-center justify-center"><Loader2 className="animate-spin text-primary" /></div>;
-  if (!isAuthenticated) return <AuthGate />;
+  if (!isAuthenticated) return <AuthGate callbackError={callbackError} />;
 
   return <div className={`min-h-[100dvh] bg-stone-50 ${isArabic ? "text-right" : "text-left"}`}>
     <aside className={`fixed inset-y-0 hidden w-64 bg-white p-4 lg:block ${isArabic ? "right-0 border-l" : "left-0 border-r"}`}>

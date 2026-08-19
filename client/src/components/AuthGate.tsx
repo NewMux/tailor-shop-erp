@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export default function AuthGate() {
+export default function AuthGate({ callbackError }: { callbackError?: string | null }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -101,6 +101,7 @@ export default function AuthGate() {
             />
           </div>
 
+          {callbackError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm leading-5 text-amber-950">{callbackError}</div>}
           {notice && <p className="text-sm text-emerald-600">{notice}</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
 

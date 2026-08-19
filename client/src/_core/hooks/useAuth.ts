@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { getAuthCallbackErrorMessage } from "@/lib/authCallback";
 import { trpc } from "@/lib/trpc";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -22,6 +23,7 @@ export function useAuth() {
   const utils = trpc.useUtils();
   const [loggingOut, setLoggingOut] = useState(false);
   const [hasSession, setHasSession] = useState<boolean | null>(null);
+  const [callbackError, setCallbackError] = useState<string | null>(null);
   const [cachedUser, setCachedUser] = useState<CachedUser | null>(() => readCachedUser());
 
   // Do not request the ERP profile until Supabase has restored local session
@@ -34,14 +36,28 @@ export function useAuth() {
 
   useEffect(() => {
     let active = true;
+    const callbackMessage = getAuthCallbackErrorMessage(window.location.hash);
 
-    void supabase.auth.getSession().then(({ data }) => {
-      if (active) setHasSession(Boolean(data.session));
-    });
+    if (callbackMessage) {
+      setCallbackError(callbackMessage);
+      window.history.replaceState(null, document.title, `${window.location.pathname}${window.location.search}`);
+      void supabase.auth.signOut({ scope: "local" }).finally(() => {
+        if (!active) return;
+        setHasSession(false);
+        setCachedUser(null);
+        try { window.localStorage.removeItem(CACHED_USER_KEY); } catch { /* Ignore storage failures during auth transitions. */ }
+        utils.auth.me.setData(undefined, null);
+      });
+    } else {
+      void supabase.auth.getSession().then(({ data }) => {
+        if (active) setHasSession(Boolean(data.session));
+      });
+    }
 
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
       setHasSession(Boolean(session));
       if (session) {
+        setCallbackError(null);
         void utils.auth.me.invalidate();
       } else {
         setCachedUser(null);
@@ -92,5 +108,6 @@ export function useAuth() {
     ...state,
     refresh: () => meQuery.refetch(),
     logout,
+    callbackError,
   };
 }
