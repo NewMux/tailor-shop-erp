@@ -5,7 +5,7 @@
 **Handover scope:** Customer management, inventory, service catalog, POS sales, connected tailoring orders, production, returns and exchanges, invoices, staff access, attendance, payroll, documents, password recovery, and operational troubleshooting.  
 **Application:** `alhussam-erp` / `tailor-shop-erp`  
 **Production URL:** [alhussam-erp.com](https://www.alhussam-erp.com)  
-**Current Vercel production deployment:** [tailor-shop-4njfmdm2j-m4ahmed7-4321s-projects.vercel.app](https://tailor-shop-4njfmdm2j-m4ahmed7-4321s-projects.vercel.app)  
+**Vercel production alias:** [tailor-shop-erp.vercel.app](https://tailor-shop-erp.vercel.app)  
 **Repository:** [m4ahmed7/tailor-shop-erp](https://github.com/m4ahmed7/tailor-shop-erp)  
 **Manual status:** Verified against the current application source, automated tests, production schema, and an authorized production session. The connected POS-to-tailoring transaction was verified read-only in production after the browser timed out; the remaining write/print workflows still require an authorized operator session for final acceptance.
 
