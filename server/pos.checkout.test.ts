@@ -7,7 +7,7 @@ import { calculateExchangeSettlement, posRouter } from "./pos";
 
 const query = (rows: unknown[]) => ({
   from: () => ({
-    where: () => ({ orderBy: () => ({ limit: () => rows }), limit: () => rows }),
+    where: () => ({ orderBy: () => ({ limit: () => rows }), limit: () => rows, for: () => ({ limit: () => rows }) }),
     orderBy: () => ({ limit: () => rows }),
     limit: () => rows,
     innerJoin: () => ({ where: () => ({ limit: () => rows }) }),
@@ -104,6 +104,15 @@ describe("pos.checkout", () => {
     expect(writes[2]).toMatchObject({ inventoryItemId: 30001, movementType: "sale", quantityChange: "-2.000", quantityAfter: "14.000" });
   });
 
+  it("blocks a signed-in user whose business access is still pending", async () => {
+    const rootDb = { select: vi.fn(() => query([])), insert: vi.fn() };
+    mocked.getDb.mockResolvedValue(rootDb);
+    const caller = posRouter.createCaller({ user: { id: 99, role: "user" } } as never);
+
+    await expect(caller.catalog.list()).rejects.toThrow("pending owner approval");
+    expect(rootDb.insert).not.toHaveBeenCalled();
+  });
+
   it("creates a confirmed tailoring order, deposit sale, linked sale line, and invoice atomically from POS", async () => {
     const writes: unknown[] = [];
     const transactionResponses = [
@@ -177,6 +186,27 @@ describe("pos.checkout", () => {
     expect(writes[3]).toMatchObject({ saleId: 712, serviceId: 4, inventoryItemId: 81, assignedTailorId: 7, measurementProfileId: 9, quantity: "1.000", lineTotal: "20.000" });
     expect(stockUpdates).toEqual([{ saleId: 712 }, { quantity: "2.000" }]);
     expect(writes[4]).toMatchObject({ inventoryItemId: 81, movementType: "sale", referenceType: "tailoring_order", referenceId: 811, quantityChange: "-2.000", quantityAfter: "2.000" });
+  });
+
+  it("returns the existing connected tailoring transaction on a retried client reference", async () => {
+    const rootResponses = [
+      [{ userId: 1, role: "admin", isActive: true }],
+      [{ saleId: 712, invoiceId: 43, saleNumber: "POS-000712", total: "20.000", paidAmount: "20.000", paymentStatus: "paid" }],
+      [{ orderNumber: "TO-000811" }],
+    ];
+    const rootDb = {
+      select: vi.fn(() => query(rootResponses.shift() || [])),
+      insert: vi.fn(),
+      transaction: vi.fn(),
+    };
+    mocked.getDb.mockResolvedValue(rootDb);
+    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+
+    const result = await caller.tailoringCheckout({ clientReference: "retry-tailor-1", sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 1, orderPrice: 45, paymentAmount: 20, paymentMethod: "cash", notes: "", productionNotes: "" });
+
+    expect(result).toMatchObject({ id: 712, invoiceId: 43, orderNumber: "TO-000811", total: 20, paymentStatus: "paid" });
+    expect(rootDb.transaction).not.toHaveBeenCalled();
+    expect(rootDb.insert).not.toHaveBeenCalled();
   });
 
   it("rejects a tailoring payment that exceeds the quoted order price before creating records", async () => {

@@ -22,6 +22,7 @@ type KeypadTarget = { type: "line"; lineId: string } | { type: "order-discount" 
 type SessionSheet = "open" | "close" | null;
 
 const formatMoney = (value: number) => `BHD ${Number(value || 0).toFixed(3)}`;
+const createClientReference = () => `pos-${crypto.randomUUID()}`;
 const urlMoney = (key: string) => {
   const value = Number(new URLSearchParams(window.location.search).get(key) || 0);
   return Number.isFinite(value) && value >= 0 ? value : 0;
@@ -86,6 +87,9 @@ export default function PointOfSale() {
   const [offlineCatalog, setOfflineCatalog] = useState<PosCatalogRecord[] | null>(null);
   const [offlineShopSettings, setOfflineShopSettings] = useState<{ vatEnabled?: boolean | null; vatRate?: string | number | null } | null>(null);
   const pendingPrintWindow = useRef<Window | null>(null);
+  const checkoutReference = useRef<string | null>(null);
+  const quickCheckoutReference = useRef<string | null>(null);
+  const tailoringCheckoutReference = useRef<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const walkInAmountInputRef = useRef<HTMLInputElement | null>(null);
   const keypadRef = useRef<HTMLDivElement | null>(null);
@@ -100,7 +104,7 @@ export default function PointOfSale() {
   const shopSettings = trpc.erp.shop.get.useQuery();
   const heldOrders = trpc.pos.orders.held.useQuery();
   const quickCheckout = trpc.pos.quickCheckout.useMutation({
-    onSuccess: async ({ invoiceId, saleNumber, total }) => { setWalkInAmount(0); setCheckoutContext("cart"); setPaymentLines([]); setRegisterScreen("catalog"); await printIssuedInvoice({ invoiceId, saleNumber, total }); },
+    onSuccess: async ({ invoiceId, saleNumber, total }) => { quickCheckoutReference.current = null; setWalkInAmount(0); setCheckoutContext("cart"); setPaymentLines([]); setRegisterScreen("catalog"); await printIssuedInvoice({ invoiceId, saleNumber, total }); },
     onError: error => { if (pendingPrintWindow.current && !pendingPrintWindow.current.closed) pendingPrintWindow.current.close(); pendingPrintWindow.current = null; toast.error(error.message); },
   });
   const discountValidation = trpc.pos.discounts.validate.useQuery({ code: discountCode || "NONE", subtotal: Math.max(0, cart.reduce((sum, line) => sum + line.price * line.quantity - line.lineDiscount, 0)) }, { enabled: false });
@@ -188,7 +192,7 @@ export default function PointOfSale() {
   const holdOrder = trpc.pos.orders.hold.useMutation({ onSuccess: result => { setCart([]); setHeldOrderId(undefined); setOrderDiscountPercent(0); setAppliedDiscountCode(""); setDiscountCode(""); setOrderNote(""); setRegisterScreen("catalog"); heldOrders.refetch(); toast.success(`${result.orderNumber} held for later`); }, onError: error => toast.error(error.message) });
   const cancelHeldOrder = trpc.pos.orders.cancel.useMutation({ onSuccess: () => { heldOrders.refetch(); toast.success("Held order cancelled"); }, onError: error => toast.error(error.message) });
   const checkout = trpc.pos.checkout.useMutation({
-    onSuccess: async ({ invoiceId, saleNumber, total }) => { setCart([]); setPaymentLines([]); setRegisterScreen("catalog"); setOrderDiscountPercent(0); setAppliedDiscountCode(""); setDiscountCode(""); setHeldOrderId(undefined); setOrderNote(""); await printIssuedInvoice({ invoiceId, saleNumber, total }); },
+    onSuccess: async ({ invoiceId, saleNumber, total }) => { checkoutReference.current = null; setCart([]); setPaymentLines([]); setRegisterScreen("catalog"); setOrderDiscountPercent(0); setAppliedDiscountCode(""); setDiscountCode(""); setHeldOrderId(undefined); setOrderNote(""); await printIssuedInvoice({ invoiceId, saleNumber, total }); },
     onError: error => { if (pendingPrintWindow.current && !pendingPrintWindow.current.closed) pendingPrintWindow.current.close(); pendingPrintWindow.current = null; toast.error(error.message); },
   });
   const returnSale = trpc.pos.returns.create.useMutation({
@@ -196,7 +200,7 @@ export default function PointOfSale() {
     onError: error => { if (pendingPrintWindow.current && !pendingPrintWindow.current.closed) pendingPrintWindow.current.close(); pendingPrintWindow.current = null; toast.error(error.message); },
   });
 
-  const resetTailoringForm = () => { setTailoringServiceId(null); setMeasurementProfileId(""); setAssignedTailorId(""); setGarmentType("Thoub"); setGarmentQuantity(1); setDueDate(""); setOrderPrice(0); setPaymentAmount(0); setOrderNotes(""); setProductionNotes(""); setCustomerSuppliedFabric(false); setFabricNotes(""); };
+  const resetTailoringForm = () => { tailoringCheckoutReference.current = null; setTailoringServiceId(null); setMeasurementProfileId(""); setAssignedTailorId(""); setGarmentType("Thoub"); setGarmentQuantity(1); setDueDate(""); setOrderPrice(0); setPaymentAmount(0); setOrderNotes(""); setProductionNotes(""); setCustomerSuppliedFabric(false); setFabricNotes(""); };
   const tailoringCheckout = trpc.pos.tailoringCheckout.useMutation({ onSuccess: async ({ invoiceId, saleNumber, total, orderNumber }) => { resetTailoringForm(); await printIssuedInvoice({ invoiceId, saleNumber, total, orderNumber }); }, onError: error => { if (pendingPrintWindow.current && !pendingPrintWindow.current.closed) pendingPrintWindow.current.close(); pendingPrintWindow.current = null; toast.error(error.message); } });
   const autoStartedSessionRef = useRef(false);
   useEffect(() => {
@@ -391,7 +395,7 @@ export default function PointOfSale() {
   const completeCheckout = async () => {
     const lines = paymentLines.filter(line => line.amount > 0);
     if (lines.reduce((sum, line) => sum + line.amount, 0) > total + 0.001) { toast.error("Payment lines cannot exceed the order total."); return; }
-    const input = { sessionId: session.data?.id, heldOrderId, customerId: customerId ? Number(customerId) : undefined, customerName: customerLabel, customerPhone: selectedCustomer?.phone, note: orderNote || undefined, discount: discountAmount, discountCode: appliedDiscountCode || undefined, paymentMethod: lines[0]?.method || paymentMethod, paymentStatus: total <= 0 || (lines.length && lines.reduce((sum, line) => sum + line.amount, 0) >= total - 0.001) ? "paid" as const : lines.length ? "partial" as const : "unpaid" as const, payments: lines.map(line => ({ method: line.method, amount: line.amount, reference: line.reference || undefined })), items: cart.map(line => ({ serviceId: line.serviceId, inventoryItemId: line.inventoryItemId, name: line.name, quantity: line.quantity, unitPrice: line.price, lineDiscount: line.lineDiscount })) };
+    const input = { clientReference: checkoutReference.current ??= createClientReference(), sessionId: session.data?.id, heldOrderId, customerId: customerId ? Number(customerId) : undefined, customerName: customerLabel, customerPhone: selectedCustomer?.phone, note: orderNote || undefined, discount: discountAmount, discountCode: appliedDiscountCode || undefined, paymentMethod: lines[0]?.method || paymentMethod, paymentStatus: total <= 0 || (lines.length && lines.reduce((sum, line) => sum + line.amount, 0) >= total - 0.001) ? "paid" as const : lines.length ? "partial" as const : "unpaid" as const, payments: lines.map(line => ({ method: line.method, amount: line.amount, reference: line.reference || undefined })), items: cart.map(line => ({ serviceId: line.serviceId, inventoryItemId: line.inventoryItemId, name: line.name, quantity: line.quantity, unitPrice: line.price, lineDiscount: line.lineDiscount })) };
     if (!navigator.onLine) {
       await enqueueOfflineSale("checkout", input);
       setCart([]); setPaymentLines([]); setRegisterScreen("catalog"); setOrderDiscountPercent(0); setAppliedDiscountCode(""); setDiscountCode(""); setHeldOrderId(undefined); setOrderNote(""); await refreshPendingCount(); toast.success("Sale saved on this device. It will sync when internet returns."); return;
@@ -406,7 +410,7 @@ export default function PointOfSale() {
     if (paid > walkInAmount + 0.001) { toast.error("Payment lines cannot exceed the walk-in amount."); return; }
     if (paid < walkInAmount - 0.001) { toast.error("Collect the full walk-in amount before checkout."); return; }
     if (lines.length !== 1) { toast.error("Choose one payment method for a walk-in amount sale."); return; }
-    const input = { sessionId: session.data?.id, customerId: customerId ? Number(customerId) : undefined, customerName: customerLabel, customerPhone: selectedCustomer?.phone, amount: walkInAmount, paymentMethod: lines[0]?.method || paymentMethod, note: orderNote || undefined };
+    const input = { clientReference: quickCheckoutReference.current ??= createClientReference(), sessionId: session.data?.id, customerId: customerId ? Number(customerId) : undefined, customerName: customerLabel, customerPhone: selectedCustomer?.phone, amount: walkInAmount, paymentMethod: lines[0]?.method || paymentMethod, note: orderNote || undefined };
     if (!navigator.onLine) {
       await enqueueOfflineSale("quickCheckout", input);
       setWalkInAmount(0); setPaymentLines([]); setCheckoutContext("cart"); setRegisterScreen("catalog"); await refreshPendingCount(); toast.success("Walk-in sale saved on this device. It will sync when internet returns."); return;
@@ -414,7 +418,7 @@ export default function PointOfSale() {
     pendingPrintWindow.current = window.open("", "_blank", "popup,width=900,height=720");
     quickCheckout.mutate(input);
   };
-  const completeTailoringCheckout = () => { if (!tailoringReady || !selectedCustomer) { toast.error("Choose the customer, saved measurement, tailor, garment, quote, and payment before issuing the order."); return; } pendingPrintWindow.current = window.open("", "_blank", "popup,width=900,height=720"); tailoringCheckout.mutate({ sessionId: session.data?.id, customerId: selectedCustomer.id, serviceId: tailoringServiceId || undefined, measurementProfileId: Number(measurementProfileId), assignedTailorId: Number(assignedTailorId), garmentType: garmentType.trim(), quantity: garmentQuantity, dueDate: dueDate || undefined, orderPrice, paymentAmount, paymentMethod, customerSuppliedFabric, fabricNotes: fabricNotes || undefined, notes: orderNotes, productionNotes }); };
+  const completeTailoringCheckout = () => { if (!tailoringReady || !selectedCustomer) { toast.error("Choose the customer, saved measurement, tailor, garment, quote, and payment before issuing the order."); return; } pendingPrintWindow.current = window.open("", "_blank", "popup,width=900,height=720"); tailoringCheckout.mutate({ clientReference: tailoringCheckoutReference.current ??= createClientReference(), sessionId: session.data?.id, customerId: selectedCustomer.id, serviceId: tailoringServiceId || undefined, measurementProfileId: Number(measurementProfileId), assignedTailorId: Number(assignedTailorId), garmentType: garmentType.trim(), quantity: garmentQuantity, dueDate: dueDate || undefined, orderPrice, paymentAmount, paymentMethod, customerSuppliedFabric, fabricNotes: fabricNotes || undefined, notes: orderNotes, productionNotes }); };
   const selectReturnItem = (itemId: number) => {
     const items = returnLookup.data?.items ?? [];
     setSelectedReturnItemId(itemId);

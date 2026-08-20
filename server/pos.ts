@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { auditLogs, customers, customRoles, discountCodes, inventoryItems, invoices, measurementProfiles, posOrders, posPayments, posSessions, saleItems, sales, services, shopSettings, staffProfiles, stockMovements, tailoringOrders, userBusinessRoles, userCustomRoles } from "../drizzle/schema";
@@ -38,14 +38,11 @@ async function dbOrThrow() {
   return db;
 }
 
-async function requireCounterAccess(userId: number, frameworkRole: "user" | "admin") {
+async function requireCounterAccess(userId: number) {
   const db = await dbOrThrow();
-  let role = (await db.select().from(userBusinessRoles).where(eq(userBusinessRoles.userId, userId)).limit(1))[0];
-  if (!role) {
-    await db.insert(userBusinessRoles).values({ userId, role: frameworkRole === "admin" ? "admin" : "sales", isActive: true });
-    role = (await db.select().from(userBusinessRoles).where(eq(userBusinessRoles.userId, userId)).limit(1))[0];
-  }
-  if (!role?.isActive) throw new TRPCError({ code: "FORBIDDEN", message: "Your ERP access is inactive." });
+  const role = (await db.select().from(userBusinessRoles).where(eq(userBusinessRoles.userId, userId)).limit(1))[0];
+  if (!role) throw new TRPCError({ code: "FORBIDDEN", message: "Your ERP access is pending owner approval." });
+  if (!role.isActive) throw new TRPCError({ code: "FORBIDDEN", message: "Your ERP access is inactive." });
   if (role.role === "admin") return;
   const assignment = (await db.select().from(userCustomRoles).where(eq(userCustomRoles.userId, userId)).limit(1))[0];
   if (assignment) {
@@ -67,6 +64,22 @@ async function existingCheckoutByReference(clientReference: string | undefined) 
   const db = await dbOrThrow();
   const existing = (await db.select({ saleId: sales.id, invoiceId: invoices.id, saleNumber: sales.saleNumber, total: sales.total, paidAmount: sales.paidAmount, paymentStatus: sales.paymentStatus }).from(sales).innerJoin(invoices, eq(invoices.saleId, sales.id)).where(eq(sales.clientReference, clientReference)).limit(1))[0];
   return existing ? { id: existing.saleId, invoiceId: existing.invoiceId, total: Number(existing.total), paidAmount: Number(existing.paidAmount), paymentStatus: existing.paymentStatus, saleNumber: existing.saleNumber } : null;
+}
+
+async function existingTailoringCheckoutByReference(clientReference: string | undefined) {
+  const replay = await existingCheckoutByReference(clientReference);
+  if (!replay) return null;
+  const db = await dbOrThrow();
+  const order = (await db.select({ orderNumber: tailoringOrders.orderNumber }).from(tailoringOrders).where(eq(tailoringOrders.saleId, replay.id)).limit(1))[0];
+  return { ...replay, orderNumber: order?.orderNumber };
+}
+
+async function consumeDiscountUsage(tx: any, discountId: number) {
+  const updated = await tx.update(discountCodes)
+    .set({ usedCount: sql`${discountCodes.usedCount} + 1` })
+    .where(and(eq(discountCodes.id, discountId), or(isNull(discountCodes.usageLimit), lt(discountCodes.usedCount, discountCodes.usageLimit))))
+    .returning({ id: discountCodes.id });
+  if (!updated.length) throw new TRPCError({ code: "BAD_REQUEST", message: "This discount code has reached its usage limit." });
 }
 
 const sessionInput = z.object({ openingCash: z.number().min(0).max(1000000), notes: z.string().trim().max(2000).optional() });
@@ -100,6 +113,7 @@ const quickCheckoutInput = z.object({
 });
 
 const tailoringCheckoutInput = z.object({
+  clientReference: z.string().trim().max(120).optional(),
   sessionId: z.number().int().positive().optional(),
   customerId: z.number().int().positive(),
   measurementProfileId: z.number().int().positive(),
@@ -176,7 +190,7 @@ async function resolveDiscount(tx: any, code: string | undefined, subtotal: numb
 export const posRouter = router({
   catalog: router({
     list: protectedProcedure.query(async ({ ctx }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      await requireCounterAccess(ctx.user.id);
       const db = await dbOrThrow();
       const [serviceRows, inventoryRows] = await Promise.all([
         db.select({ service: services, inventory: inventoryItems }).from(services).leftJoin(inventoryItems, eq(services.inventoryItemId, inventoryItems.id)).where(eq(services.isActive, true)).orderBy(services.name),
@@ -218,12 +232,12 @@ export const posRouter = router({
   }),
   session: router({
     current: protectedProcedure.query(async ({ ctx }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      await requireCounterAccess(ctx.user.id);
       const db = await dbOrThrow();
       return (await db.select().from(posSessions).where(eq(posSessions.status, "open")).orderBy(desc(posSessions.openedAt)).limit(1))[0] || null;
     }),
     open: protectedProcedure.input(sessionInput).mutation(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      await requireCounterAccess(ctx.user.id);
       const db = await dbOrThrow();
       const existing = (await db.select().from(posSessions).where(eq(posSessions.status, "open")).orderBy(desc(posSessions.openedAt)).limit(1))[0];
       if (existing) return existing;
@@ -234,7 +248,7 @@ export const posRouter = router({
       return session;
     }),
     close: protectedProcedure.input(z.object({ sessionId: z.number().int().positive(), closingCash: z.number().min(0), notes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      await requireCounterAccess(ctx.user.id);
       const db = await dbOrThrow();
       const session = (await db.select().from(posSessions).where(eq(posSessions.id, input.sessionId)).limit(1))[0];
       if (!session || session.status !== "open") throw new TRPCError({ code: "NOT_FOUND", message: "The POS session is not open." });
@@ -245,12 +259,12 @@ export const posRouter = router({
   }),
   orders: router({
     held: protectedProcedure.query(async ({ ctx }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      await requireCounterAccess(ctx.user.id);
       const db = await dbOrThrow();
       return db.select().from(posOrders).where(eq(posOrders.status, "held")).orderBy(desc(posOrders.updatedAt)).limit(100);
     }),
     hold: protectedProcedure.input(heldOrderInput).mutation(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      await requireCounterAccess(ctx.user.id);
       const db = await dbOrThrow();
       const orderNumber = `HOLD-${Date.now()}`;
       const result = await db.insert(posOrders).values({ orderNumber, sessionId: input.sessionId, customerId: input.customerId, cartJson: input.items, note: input.note || null, createdBy: ctx.user.id }).returning({ id: posOrders.id });
@@ -259,7 +273,7 @@ export const posRouter = router({
       return { id, orderNumber };
     }),
     cancel: protectedProcedure.input(z.object({ orderId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      await requireCounterAccess(ctx.user.id);
       const db = await dbOrThrow();
       await db.update(posOrders).set({ status: "cancelled", updatedAt: new Date() }).where(eq(posOrders.id, input.orderId));
       await audit(ctx.user.id, "POS_ORDER_CANCELLED", "posOrder", input.orderId, {});
@@ -268,13 +282,13 @@ export const posRouter = router({
   }),
   discounts: router({
     validate: protectedProcedure.input(z.object({ code: z.string().trim().min(1).max(80), subtotal: z.number().min(0) })).query(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      await requireCounterAccess(ctx.user.id);
       const db = await dbOrThrow();
       return resolveDiscount(db, input.code, input.subtotal);
     }),
   }),
   checkout: protectedProcedure.input(checkoutInput).mutation(async ({ ctx, input }) => {
-    await requireCounterAccess(ctx.user.id, ctx.user.role);
+    await requireCounterAccess(ctx.user.id);
     const replay = await existingCheckoutByReference(input.clientReference);
     if (replay) return replay;
     const db = await dbOrThrow();
@@ -285,7 +299,7 @@ export const posRouter = router({
       const resolved = [] as Array<{ serviceId: number | null; inventoryItemId: number | null; name: string; quantity: number; unitPrice: number; lineDiscount: number; stockPerSaleUnit: number; stock: { id: number; name: string; quantity: string; unit: string } | null }>;
       for (const item of input.items) {
         if (item.inventoryItemId && !item.serviceId) {
-          const stock = (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, item.inventoryItemId)).limit(1))[0];
+          const stock = (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, item.inventoryItemId)).for("update").limit(1))[0];
           if (!stock?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "This inventory item is no longer available at POS." });
           const lineSubtotal = item.quantity * item.unitPrice;
           resolved.push({ serviceId: null, inventoryItemId: stock.id, name: stock.name, quantity: item.quantity, unitPrice: item.unitPrice, lineDiscount: Math.min(item.lineDiscount, lineSubtotal), stockPerSaleUnit: 1, stock });
@@ -294,7 +308,7 @@ export const posRouter = router({
         const catalogItem = (await tx.select().from(services).where(eq(services.id, item.serviceId!)).limit(1))[0];
         if (!catalogItem || !catalogItem.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: `${item.name} is no longer available at POS.` });
         if (item.inventoryItemId && item.inventoryItemId !== catalogItem.inventoryItemId) throw new TRPCError({ code: "BAD_REQUEST", message: `${catalogItem.name} no longer matches the selected inventory item.` });
-        const stock = catalogItem.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, catalogItem.inventoryItemId)).limit(1))[0] : null;
+        const stock = catalogItem.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, catalogItem.inventoryItemId)).for("update").limit(1))[0] : null;
         if (catalogItem.inventoryItemId && !stock?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: `${catalogItem.name} has no active inventory link.` });
         const unitPrice = Number(catalogItem.unitPrice);
         const lineSubtotal = item.quantity * unitPrice;
@@ -327,7 +341,7 @@ export const posRouter = router({
         }
       }
       if (payments.length) for (const payment of payments) await tx.insert(posPayments).values({ saleId, method: payment.method, amount: money(payment.amount), reference: payment.reference || null, createdBy: ctx.user.id });
-      if (code.id) await tx.update(discountCodes).set({ usedCount: (await tx.select().from(discountCodes).where(eq(discountCodes.id, code.id)).limit(1))[0]?.usedCount ? (await tx.select().from(discountCodes).where(eq(discountCodes.id, code.id)).limit(1))[0].usedCount + 1 : 1 }).where(eq(discountCodes.id, code.id));
+      if (code.id) await consumeDiscountUsage(tx, code.id);
       const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: calculatedStatus, notes: `${input.note || "Issued from Odoo-style POS register."}${tax.vatAmount > 0 ? ` VAT ${money(tax.vatRate)}% included.` : ""}` }).returning({ id: invoices.id });
       const invoiceId = Number(invoiceResult[0]?.id || 0);
       if (!invoiceId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "The invoice could not be created." });
@@ -338,7 +352,7 @@ export const posRouter = router({
     return { id: checkout.saleId, invoiceId: checkout.invoiceId, total: checkout.total, paidAmount: checkout.paidAmount, paymentStatus: checkout.paymentStatus, saleNumber };
   }),
   quickCheckout: protectedProcedure.input(quickCheckoutInput).mutation(async ({ ctx, input }) => {
-    await requireCounterAccess(ctx.user.id, ctx.user.role);
+    await requireCounterAccess(ctx.user.id);
     const replay = await existingCheckoutByReference(input.clientReference);
     if (replay) return replay;
     const db = await dbOrThrow();
@@ -392,9 +406,9 @@ export const posRouter = router({
     return { id: checkout.saleId, invoiceId: checkout.invoiceId, total: checkout.total, paidAmount: checkout.paidAmount, paymentStatus: checkout.paymentStatus, saleNumber };
   }),
   returns: router({
-    lookup: protectedProcedure.input(z.object({ saleNumber: z.string().trim().min(1).max(160), search: z.string().trim().min(1).max(160).optional() })).query(async ({ ctx, input }) => { await requireCounterAccess(ctx.user.id, ctx.user.role); const db = await dbOrThrow(); const term = (input.search || input.saleNumber).trim(); const exact = (await db.select().from(sales).where(eq(sales.saleNumber, term)).limit(1))[0]; const sale = exact || (await db.select().from(sales).where(and(or(like(sales.saleNumber, `%${term}%`), like(sales.customerNameSnapshot, `%${term}%`), like(sales.customerPhoneSnapshot, `%${term}%`)), sql`${sales.returnOfSaleId} is null`)).orderBy(desc(sales.createdAt)).limit(1))[0]; if (!sale || sale.returnOfSaleId) return null; const items = await db.select().from(saleItems).where(eq(saleItems.saleId, sale.id)); return { sale, items }; }),
+    lookup: protectedProcedure.input(z.object({ saleNumber: z.string().trim().min(1).max(160), search: z.string().trim().min(1).max(160).optional() })).query(async ({ ctx, input }) => { await requireCounterAccess(ctx.user.id); const db = await dbOrThrow(); const term = (input.search || input.saleNumber).trim(); const exact = (await db.select().from(sales).where(eq(sales.saleNumber, term)).limit(1))[0]; const sale = exact || (await db.select().from(sales).where(and(or(like(sales.saleNumber, `%${term}%`), like(sales.customerNameSnapshot, `%${term}%`), like(sales.customerPhoneSnapshot, `%${term}%`)), sql`${sales.returnOfSaleId} is null`)).orderBy(desc(sales.createdAt)).limit(1))[0]; if (!sale || sale.returnOfSaleId) return null; const items = await db.select().from(saleItems).where(eq(saleItems.saleId, sale.id)); return { sale, items }; }),
     create: protectedProcedure.input(returnInput).mutation(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id, ctx.user.role);
+      await requireCounterAccess(ctx.user.id);
       const db = await dbOrThrow();
       const shop = (await db.select().from(shopSettings).limit(1))[0];
       const result = await db.transaction(async tx => {
@@ -428,12 +442,12 @@ export const posRouter = router({
           if (replacementInput.serviceId) {
             const service = (await tx.select().from(services).where(eq(services.id, replacementInput.serviceId)).limit(1))[0];
             if (!service || !service.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "The replacement service is no longer active." });
-            const stock = service.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, service.inventoryItemId)).limit(1))[0] || null : null;
+            const stock = service.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, service.inventoryItemId)).for("update").limit(1))[0] || null : null;
             const stockPerSaleUnit = service.inventoryItemId ? Number(service.defaultFabricMeters || 1) : 0;
             if (stock && Number(stock.quantity) + 0.001 < replacementInput.quantity * stockPerSaleUnit) throw new TRPCError({ code: "BAD_REQUEST", message: `Not enough stock for ${service.name}.` });
             replacement = { serviceId: service.id, inventoryItemId: service.inventoryItemId || null, name: service.name, quantity: replacementInput.quantity, unitPrice: Number(service.unitPrice), stockPerSaleUnit, stock };
           } else {
-            const stock = replacementInput.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, replacementInput.inventoryItemId)).limit(1))[0] || null : null;
+            const stock = replacementInput.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, replacementInput.inventoryItemId)).for("update").limit(1))[0] || null : null;
             if (!stock || !stock.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "The replacement inventory item is no longer active." });
             const unitPrice = Number(stock.salePrice) > 0 ? Number(stock.salePrice) : Number(stock.costPerUnit);
             if (unitPrice <= 0) throw new TRPCError({ code: "BAD_REQUEST", message: `Set a sale price for ${stock.name} before using it as an exchange replacement.` });
@@ -453,7 +467,7 @@ export const posRouter = router({
         if (input.mode === "items" || input.mode === "exchange") for (const line of lines) {
           await tx.insert(saleItems).values({ saleId, serviceId: line.source.serviceId, inventoryItemId: line.source.inventoryItemId, nameSnapshot: line.source.nameSnapshot, quantity: money(-line.quantity), unitPrice: money(Number(line.source.unitPrice)), lineDiscount: money(Number(line.source.lineDiscount)), lineTotal: money(-line.lineTotal), assignedTailorId: line.source.assignedTailorId, measurementProfileId: line.source.measurementProfileId });
           if (line.source.inventoryItemId) {
-            const stock = (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, line.source.inventoryItemId)).limit(1))[0];
+            const stock = (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, line.source.inventoryItemId)).for("update").limit(1))[0];
             if (stock) {
               const before = Number(stock.quantity);
               const stockPerSaleUnit = line.source.serviceId ? Number((await tx.select({ defaultFabricMeters: services.defaultFabricMeters }).from(services).where(eq(services.id, line.source.serviceId)).limit(1))[0]?.defaultFabricMeters || 1) : 1; const after = before + line.quantity * stockPerSaleUnit; await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq(inventoryItems.id, stock.id));
@@ -490,7 +504,9 @@ export const posRouter = router({
     }),
   }),
   tailoringCheckout: protectedProcedure.input(tailoringCheckoutInput).mutation(async ({ ctx, input }) => {
-    await requireCounterAccess(ctx.user.id, ctx.user.role);
+    await requireCounterAccess(ctx.user.id);
+    const replay = await existingTailoringCheckoutByReference(input.clientReference);
+    if (replay) return replay;
     const db = await dbOrThrow();
     const shop = (await db.select().from(shopSettings).limit(1))[0];
     const orderNumber = `TO-${Date.now()}`;
@@ -507,14 +523,14 @@ export const posRouter = router({
       if (!tailor?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active tailor for this production order." });
       const service = input.serviceId ? (await tx.select().from(services).where(eq(services.id, input.serviceId)).limit(1))[0] : null;
       if (input.serviceId && (!service || !service.isActive)) throw new TRPCError({ code: "BAD_REQUEST", message: "The selected tailoring service is no longer available." });
-      const linkedStock = service?.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, service.inventoryItemId)).limit(1))[0] : null;
+      const linkedStock = service?.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, service.inventoryItemId)).for("update").limit(1))[0] : null;
       if (service?.inventoryItemId && !linkedStock?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "The selected tailoring service has no active material link." });
       const stockPerPiece = service?.inventoryItemId ? Number(service.defaultFabricMeters || 1) : 0;
       const stockNeeded = input.quantity * stockPerPiece;
       if (!input.customerSuppliedFabric && linkedStock && Number(linkedStock.quantity) < stockNeeded) throw new TRPCError({ code: "BAD_REQUEST", message: `${linkedStock.name} does not have enough stock for this tailoring order.` });
       const orderResult = await tx.insert(tailoringOrders).values({ orderNumber, customerId: customer.id, measurementProfileId: measurement.id, assignedTailorId: tailor.id, garmentType: input.garmentType, quantity: input.quantity, dueDate: input.dueDate ? new Date(input.dueDate) : null, price: money(input.orderPrice), customerSuppliedFabric: input.customerSuppliedFabric, fabricNotes: input.fabricNotes || null, status: "confirmed", notes: input.notes || null, productionNotes: input.productionNotes || null, createdBy: ctx.user.id }).returning({ id: tailoringOrders.id });
       const orderId = Number(orderResult[0]?.id || 0);
-      const saleResult = await tx.insert(sales).values({ saleNumber, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(paymentTax.netAmount), discount: "0.000", vatRate: money(paymentTax.vatRate), vatAmount: money(paymentTax.vatAmount), total: money(input.paymentAmount), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: resolvedSession.id, createdBy: ctx.user.id }).returning({ id: sales.id });
+      const saleResult = await tx.insert(sales).values({ saleNumber, clientReference: input.clientReference || null, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(paymentTax.netAmount), discount: "0.000", vatRate: money(paymentTax.vatRate), vatAmount: money(paymentTax.vatAmount), total: money(input.paymentAmount), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: resolvedSession.id, createdBy: ctx.user.id }).returning({ id: sales.id });
       const saleId = Number(saleResult[0]?.id || 0); await tx.update(tailoringOrders).set({ saleId }).where(eq(tailoringOrders.id, orderId)); await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(input.paymentAmount), reference: `${orderNumber} initial payment`, createdBy: ctx.user.id });
       await tx.insert(saleItems).values({ saleId, serviceId: service?.id || null, inventoryItemId: linkedStock?.id || null, nameSnapshot: `${service?.name || input.garmentType} tailoring order · ${paymentStatus === "paid" ? "full payment" : "deposit"}`, quantity: money(input.quantity), unitPrice: money(paymentTax.netAmount / input.quantity), lineDiscount: "0.000", lineTotal: money(paymentTax.netAmount), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
       if (!input.customerSuppliedFabric && linkedStock && stockNeeded > 0) {
