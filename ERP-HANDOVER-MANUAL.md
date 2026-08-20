@@ -6,9 +6,9 @@
 **Application:** `alhussam-erp` / `tailor-shop-erp`  
 **Production URL:** [tailor-shop-gy2c1j8oq-m4ahmed7-4321s-projects.vercel.app](https://tailor-shop-gy2c1j8oq-m4ahmed7-4321s-projects.vercel.app)  
 **Repository:** [m4ahmed7/tailor-shop-erp](https://github.com/m4ahmed7/tailor-shop-erp)  
-**Manual status:** Verified against the current application source, automated tests, and production schema. Protected live workflows still require an authorized operator session for final acceptance.
+**Manual status:** Verified against the current application source, automated tests, production schema, and an authorized production session. The connected POS-to-tailoring transaction was verified read-only in production after the browser timed out; the remaining write/print workflows still require an authorized operator session for final acceptance.
 
-> **Important handover distinction:** This manual separates behavior verified from the application source and automated tests from behavior executed interactively in production. The production shell and staff sign-in boundary were tested live, but an authenticated browser session was not available during this handover run. The live operator checklist at the end must therefore be completed by the shop owner or an authorized manager.
+> **Important handover distinction:** This manual separates behavior verified from application source and automated tests from behavior executed interactively in production. An authorized owner session successfully opened the protected workspaces and verified existing customer, inventory, tailoring, sales-history, and POS data. A controlled POS-to-tailoring submission was then confirmed through read-only production records after the browser became unresponsive. Returns, payroll, staff-document upload, invoice printing, password-email completion, and settings write operations were not executed in this run; those remain explicit owner acceptance steps.
 
 ## 1. Operating model
 
@@ -189,15 +189,15 @@ The following checklist is the final operator acceptance run. Use a clearly mark
 
 | Check | Operator action | Expected result | Status |
 |---|---|---|---|
-| Sign-in | Sign in with an approved staff account | ERP workspace opens only after authentication | Pending live operator |
-| Password recovery | Request reset, follow the email, set a new password | Recovery screen appears before ERP access | Source repaired; live operator pending |
-| Role boundary | Sign in as a restricted role and open an unauthorized workspace | Access is denied or the route is hidden | Automated passed; live operator pending |
-| Customer | Create customer, create measurement, select customer in POS | Customer label and order count update immediately | Automated/source passed; live operator pending |
-| Inventory | Add a material measured in meters and a sellable size/color item | Correct units, variants, and prices appear | Source passed; live operator pending |
-| Service catalog | Create a service in Inventory and link optional material | Service appears in POS catalog | Automated/source passed; live operator pending |
+| Sign-in | Sign in with an approved staff account | ERP workspace opens only after authentication | **Passed live** |
+| Password recovery | Request reset, follow the email, set a new password | Recovery screen appears before ERP access | Source repaired and automated passed; live email completion pending |
+| Role boundary | Sign in as a restricted role and open an unauthorized workspace | Access is denied or the route is hidden | **Automated passed; live operator pending** |
+| Customer | Create customer, create measurement, select customer in POS | Customer label and order count update immediately | Existing customer selection and POS synchronization **passed live**; create/edit mutation pending |
+| Inventory | Add a material measured in meters and a sellable size/color item | Correct units, variants, and prices appear | Existing meter/roll display **passed live**; add/edit mutation pending |
+| Service catalog | Create a service in Inventory and link optional material | Service management and POS visibility **passed live** for existing data; add/edit mutation pending |
 | Normal sale | Add two lines, edit quantity and price, take payment, print invoice | One sale, payment, invoice, and stock movement are recorded | Automated/source passed; live operator pending |
-| Tailoring sale | Start New tailoring order from a service, choose measurement and tailor, take deposit | Production order and connected commercial records are created atomically | Automated passed; live operator pending |
-| Production | Move a demo order through confirmed, cutting, ready, and collected | Status changes follow the production lifecycle | Automated/source passed; live operator pending |
+| Tailoring sale | Start New tailoring order from a service, choose measurement and tailor, take deposit | Production order and connected commercial records are created atomically | **Passed live and read-only production verified**: `TO-1787199224117`, sale `POS-TO-1787199224117`, invoice `INV-000021`, cash payment `48.000 BHD`, and linked stock deduction |
+| Production | Move a demo order through confirmed, cutting, ready, and collected | Status changes and linked commercial data were visible live; stage lifecycle pending |
 | Return | Search by receipt, return one line, confirm refund | Eligible stock is restored and refund is recorded | Automated passed; live operator pending |
 | Exchange | Replace one line with a cheaper and a more expensive item | Difference is refunded or collected correctly | Automated passed; live operator pending |
 | Payroll | Record absence, calculate month, review preview, create payslip | Automatic deduction appears before final net amount | Automated/source passed; live operator pending |
@@ -215,11 +215,11 @@ The handover audit produced the following repository evidence after the password
 | Production build: `pnpm build:vercel` | Passed |
 | Formatting/whitespace: `git diff --check` | Passed before generated build output |
 | Production shell smoke test | Passed; staff sign-in boundary loaded |
-| Protected live workflow test | Pending an authorized browser session |
+| Protected live workflow test | Authorized session reached core workspaces; connected tailoring transaction verified read-only in production; remaining operator checks pending |
 | Production schema: `inventoryItems.size` | Applied and confirmed |
 | Production schema: nullable unique `tailoringOrders.saleId` | Applied and confirmed |
 | Existing connected-sale release | `d68898a` on `main` |
-| Handover and password-recovery release | `08caa50` on `main`; Vercel production deployment is **READY** |
+| Handover and password-recovery release | `57cad96` on `main`; Vercel production deployment is **READY** |
 
 The production build emits `api/index.js` as a generated artifact. It must be excluded from source commits unless the project’s deployment process explicitly requires the generated bundle. The source commit should contain the recovery-flow repair, the handover manual, and the updated evidence files only.
 
@@ -227,7 +227,7 @@ The production build emits `api/index.js` as a generated artifact. It must be ex
 
 The owner should first save the Shop Settings record with the real business identity, invoice prefix, VAT settings, and invoice terms. The owner should then remove or deactivate all `[TEST]` records, create the real material and service catalog, and complete the live acceptance checklist with a demo customer and test records.
 
-The owner should also send one password-reset email to a controlled test account and confirm that the recipient sees the new password screen. Finally, the owner should test each staff role using a separate account, confirm the expected workspace boundaries, and retain the audit trail for the first real sales day.
+The owner should also send one password-reset email to a controlled test account and confirm that the recipient sees the new password screen. The authorized live session verified sign-in, core workspace navigation, customer selection, catalog visibility, customer/cart synchronization, and one complete connected tailoring transaction through read-only production records. The owner must still test each staff role using a separate account, complete the return, payroll, staff-document, invoice-print, settings, and production-stage checks, and retain the audit trail for the first real sales day.
 
 ## References
 
