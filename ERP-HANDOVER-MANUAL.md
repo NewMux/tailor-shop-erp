@@ -4,7 +4,7 @@
 **Prepared by:** Manus AI  
 **Handover scope:** Customer management, inventory, service catalog, POS sales, connected tailoring orders, production, returns and exchanges, invoices, staff access, attendance, payroll, documents, password recovery, and operational troubleshooting.  
 **Application:** `alhussam-erp` / `tailor-shop-erp`  
-**Production URL:** [tailor-shop-ov75fzxr9-m4ahmed7-4321s-projects.vercel.app](https://tailor-shop-ov75fzxr9-m4ahmed7-4321s-projects.vercel.app)  
+**Production URL:** [tailor-shop-gy2c1j8oq-m4ahmed7-4321s-projects.vercel.app](https://tailor-shop-gy2c1j8oq-m4ahmed7-4321s-projects.vercel.app)  
 **Repository:** [m4ahmed7/tailor-shop-erp](https://github.com/m4ahmed7/tailor-shop-erp)  
 **Manual status:** Verified against the current application source, automated tests, and production schema. Protected live workflows still require an authorized operator session for final acceptance.
 
@@ -219,7 +219,7 @@ The handover audit produced the following repository evidence after the password
 | Production schema: `inventoryItems.size` | Applied and confirmed |
 | Production schema: nullable unique `tailoringOrders.saleId` | Applied and confirmed |
 | Existing connected-sale release | `d68898a` on `main` |
-| Password-recovery repair | Present in the current working tree; publish after final review |
+| Handover and password-recovery release | `08caa50` on `main`; Vercel production deployment is **READY** |
 
 The production build emits `api/index.js` as a generated artifact. It must be excluded from source commits unless the project’s deployment process explicitly requires the generated bundle. The source commit should contain the recovery-flow repair, the handover manual, and the updated evidence files only.
 
@@ -237,4 +237,4 @@ The owner should also send one password-reset email to a controlled test account
 
 [3]: https://github.com/m4ahmed7/tailor-shop-erp "Al Hussam Tailor ERP GitHub repository"
 
-[4]: https://tailor-shop-ov75fzxr9-m4ahmed7-4321s-projects.vercel.app "Al Hussam Tailor ERP production deployment"
+[4]: https://tailor-shop-gy2c1j8oq-m4ahmed7-4321s-projects.vercel.app "Al Hussam Tailor ERP production deployment"

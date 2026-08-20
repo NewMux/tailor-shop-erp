@@ -17,3 +17,9 @@
 - Production Supabase project: `cevoyflcdsdkhigyunlv`
 - Main application routes: `/`, `/customers`, `/inventory`, `/tailoring`, `/sales`, `/sales-history`, `/invoices`, `/team`, `/settings`, `/audit`
 - Automated test files: `auth.callback.test.ts`, `custom.roles.test.ts`, `dashboard.test.ts`, `erp.validation.test.ts`, `invoice.filters.test.ts`, `invoice.print.test.ts`, `operations.search.test.ts`, `pos.catalog.test.ts`, `pos.checkout.test.ts`, `pos.test.ts`, `sales.report.test.ts`, `tailoring.orders.test.ts`
+
+## Final handover release
+
+Commit `08caa503a4f79c75f16c21ab54146896ca8cc2a5` was pushed to `main` with the canonical GitHub no-reply author email. Vercel production deployment `dpl_AejAAi4p65Zv1zqM6B7F3gN53rcw` reached `READY` at `https://tailor-shop-gy2c1j8oq-m4ahmed7-4321s-projects.vercel.app`.
+
+The public deployment and sign-in boundary were reachable. No authorized browser session was available, so customer records, real checkout mutations, returns, payroll writes, staff access changes, and password-email completion were not executed against production during this run. These are explicitly listed as operator acceptance steps in `ERP-HANDOVER-MANUAL.md`.
