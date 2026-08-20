@@ -4,7 +4,8 @@
 **Prepared by:** Manus AI  
 **Handover scope:** Customer management, inventory, service catalog, POS sales, connected tailoring orders, production, returns and exchanges, invoices, staff access, attendance, payroll, documents, password recovery, and operational troubleshooting.  
 **Application:** `alhussam-erp` / `tailor-shop-erp`  
-**Production URL:** [tailor-shop-gy2c1j8oq-m4ahmed7-4321s-projects.vercel.app](https://tailor-shop-gy2c1j8oq-m4ahmed7-4321s-projects.vercel.app)  
+**Production URL:** [alhussam-erp.com](https://www.alhussam-erp.com)  
+**Current Vercel production deployment:** [tailor-shop-4njfmdm2j-m4ahmed7-4321s-projects.vercel.app](https://tailor-shop-4njfmdm2j-m4ahmed7-4321s-projects.vercel.app)  
 **Repository:** [m4ahmed7/tailor-shop-erp](https://github.com/m4ahmed7/tailor-shop-erp)  
 **Manual status:** Verified against the current application source, automated tests, production schema, and an authorized production session. The connected POS-to-tailoring transaction was verified read-only in production after the browser timed out; the remaining write/print workflows still require an authorized operator session for final acceptance.
 
@@ -237,4 +238,4 @@ The owner should also send one password-reset email to a controlled test account
 
 [3]: https://github.com/m4ahmed7/tailor-shop-erp "Al Hussam Tailor ERP GitHub repository"
 
-[4]: https://tailor-shop-gy2c1j8oq-m4ahmed7-4321s-projects.vercel.app "Al Hussam Tailor ERP production deployment"
+[4]: https://www.alhussam-erp.com "Al Hussam Tailor ERP production deployment"
