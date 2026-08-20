@@ -14,6 +14,7 @@ const query = (rows: unknown[]) => {
     limit: () => rows,
     leftJoin: () => chain,
     from: () => chain,
+    groupBy: () => rows,
   };
   return chain;
 };
@@ -55,7 +56,7 @@ describe("pos.catalog", () => {
       { id: 81, code: "NAVY-01", name: "Navy cotton", category: "fabric", quantity: "10.000", unit: "Meters", costPerUnit: "7.500", isActive: true },
       { id: 82, code: "BUTTON-01", name: "Metal buttons", category: "accessory", quantity: "24.000", unit: "Pieces", costPerUnit: "0.750", isActive: true },
     ];
-    const responses = [[{ userId: 1, role: "admin", isActive: true }], serviceRows, inventoryRows];
+    const responses = [[{ userId: 1, role: "admin", isActive: true }], serviceRows, inventoryRows, []];
     const db = { select: vi.fn(() => query(responses.shift() || [])) };
     mocked.getDb.mockResolvedValue(db);
     const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);

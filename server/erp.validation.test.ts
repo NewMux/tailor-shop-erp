@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TrpcContext } from "./_core/context";
 import { appRouter } from "./routers";
 import { getMonthWindow, rollDerivedQuantity } from "./erp";
+import { effectiveInventoryQuantity } from "./inventoryQuantity";
 
 function context(): TrpcContext {
   return { user: { id: 1, openId: "test-user", name: "Test User", email: "test@example.com", loginMethod: "manus", role: "user", createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() }, req: {} as TrpcContext["req"], res: {} as TrpcContext["res"] };
@@ -25,6 +26,12 @@ describe("ERP input contracts", () => {
     expect(rollDerivedQuantity("material", 0, 20)).toBeNull();
     expect(rollDerivedQuantity("material", 10)).toBeNull();
     expect(rollDerivedQuantity("item", 10, 20)).toBeNull();
+  });
+  it("uses roll-derived availability for legacy zero-stock materials without movement history", () => {
+    expect(effectiveInventoryQuantity({ inventoryType: "material", quantity: "0.000", rollCount: 10, metersPerRoll: "20.000", hasMovement: false })).toBe(200);
+  });
+  it("does not resurrect a genuinely depleted material that has movement history", () => {
+    expect(effectiveInventoryQuantity({ inventoryType: "material", quantity: "0.000", rollCount: 10, metersPerRoll: "20.000", hasMovement: true })).toBe(0);
   });
   it("calculates inclusive UTC month boundaries for monthly reporting", () => {
     const window = getMonthWindow("2026-02");

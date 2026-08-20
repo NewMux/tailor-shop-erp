@@ -189,7 +189,7 @@ var systemRouter = router({
 });
 
 // server/erp.ts
-import { and, desc, eq as eq2, gte, like, lte, max, or, sql } from "drizzle-orm";
+import { and, desc, eq as eq2, gte, inArray, like, lte, max, or, sql } from "drizzle-orm";
 import { TRPCError as TRPCError3 } from "@trpc/server";
 import { z as z2 } from "zod";
 
@@ -284,6 +284,20 @@ async function getUserByOpenId(openId) {
   return (await db.select().from(users).where(eq(users.openId, openId)).limit(1))[0];
 }
 
+// server/inventoryQuantity.ts
+var rollDerivedQuantity = (inventoryType, rollCount, metersPerRoll) => inventoryType === "material" && rollCount > 0 && metersPerRoll && metersPerRoll > 0 ? rollCount * metersPerRoll : null;
+var effectiveInventoryQuantity = ({
+  inventoryType,
+  quantity,
+  rollCount,
+  metersPerRoll,
+  hasMovement
+}) => {
+  const currentQuantity = Number(quantity || 0);
+  if (currentQuantity !== 0 || hasMovement) return currentQuantity;
+  return rollDerivedQuantity(inventoryType, Number(rollCount || 0), Number(metersPerRoll || 0)) ?? currentQuantity;
+};
+
 // server/storage.ts
 function getForgeConfig() {
   const forgeUrl = ENV.forgeApiUrl;
@@ -359,7 +373,6 @@ var customPermissionValues = ["dashboard", "customers", "sales", "inventory", "p
 var legacyPermissions = { admin: ["dashboard", "customers", "sales", "inventory", "payroll", "production"], sales: ["dashboard", "customers", "sales"], tailor: ["customers", "production"], inventory: ["inventory"], payroll: ["payroll"] };
 var customRoleCanAccess = (permissions, allowed) => allowed.filter((role) => role !== "admin").some((role) => legacyPermissions[role].some((permission) => permissions.includes(permission)));
 var three = (value) => value.toFixed(3);
-var rollDerivedQuantity = (inventoryType, rollCount, metersPerRoll) => inventoryType === "material" && rollCount > 0 && metersPerRoll && metersPerRoll > 0 ? rollCount * metersPerRoll : null;
 var getMonthBounds = (payPeriod) => {
   const start = /* @__PURE__ */ new Date(`${payPeriod}-01T00:00:00.000Z`);
   const end = new Date(start);
@@ -553,49 +566,59 @@ var erpRouter = router({
     await audit(ctx.user.id, "MEASUREMENT_VERSION_CREATED", "measurementProfile", profileId);
     return { id: profileId };
   }) }),
-  inventory: router({ list: protectedProcedure.query(async ({ ctx }) => {
-    await access(ctx.user.id, ctx.user.role, ["admin", "sales", "inventory"]);
-    return (await dbOrThrow()).select().from(inventoryItems).where(eq2(inventoryItems.isActive, true)).orderBy(inventoryItems.name);
-  }), create: protectedProcedure.input(z2.object({ code: z2.string().min(1), name: z2.string().min(2), inventoryType: z2.enum(["material", "item"]).default("material"), category: z2.enum(["fabric", "lining", "buttons", "thread", "accessory", "other"]), color: z2.string(), size: z2.string().optional(), widthInches: z2.number().optional(), unit: z2.string().min(1), minThreshold: z2.number().min(0), costPerUnit: z2.number().min(0), salePrice: z2.number().min(0).default(0), openingQuantity: z2.number().min(0), rollCount: z2.number().int().min(0).default(0), metersPerRoll: z2.number().positive().optional() })).mutation(async ({ ctx, input }) => {
-    await access(ctx.user.id, ctx.user.role, inventoryRoles);
-    const db = await dbOrThrow();
-    const openingQuantity = rollDerivedQuantity(input.inventoryType, input.rollCount, input.metersPerRoll) ?? input.openingQuantity;
-    const result = await db.insert(inventoryItems).values({ ...input, color: input.color || null, size: input.size || null, widthInches: input.widthInches?.toString(), quantity: three(openingQuantity), rollCount: input.rollCount, metersPerRoll: input.metersPerRoll?.toString() || null, minThreshold: three(input.minThreshold), costPerUnit: three(input.costPerUnit), salePrice: three(input.salePrice) }).returning({ id: inventoryItems.id });
-    const itemId = id(result);
-    if (openingQuantity) await db.insert(stockMovements).values({ inventoryItemId: itemId, movementType: "opening", quantityChange: three(openingQuantity), quantityBefore: "0.000", quantityAfter: three(openingQuantity), createdBy: ctx.user.id, notes: "Opening balance" });
-    await audit(ctx.user.id, "INVENTORY_CREATED", "inventoryItem", itemId);
-    return { id: itemId };
-  }), update: protectedProcedure.input(z2.object({ id: z2.number().int().positive(), code: z2.string().min(1), name: z2.string().min(2), inventoryType: z2.enum(["material", "item"]).default("material"), category: z2.enum(["fabric", "lining", "buttons", "thread", "accessory", "other"]), color: z2.string(), size: z2.string().optional(), widthInches: z2.number().optional(), unit: z2.string().min(1), minThreshold: z2.number().min(0), costPerUnit: z2.number().min(0), salePrice: z2.number().min(0).default(0), rollCount: z2.number().int().min(0), metersPerRoll: z2.number().positive().optional() })).mutation(async ({ ctx, input }) => {
-    await access(ctx.user.id, ctx.user.role, inventoryRoles);
-    const db = await dbOrThrow();
-    const item = (await db.select().from(inventoryItems).where(eq2(inventoryItems.id, input.id)).limit(1))[0];
-    if (!item) throw new TRPCError3({ code: "NOT_FOUND", message: "Inventory item not found." });
-    const seedQuantity = Number(item.quantity) <= 0 ? rollDerivedQuantity(input.inventoryType, input.rollCount, input.metersPerRoll) : null;
-    const quantityBefore = Number(item.quantity);
-    const quantityAfter = seedQuantity ?? quantityBefore;
-    await db.transaction(async (tx) => {
-      await tx.update(inventoryItems).set({ code: input.code, name: input.name, inventoryType: input.inventoryType, category: input.category, color: input.color || null, size: input.size || null, widthInches: input.widthInches?.toString(), unit: input.unit, quantity: three(quantityAfter), minThreshold: three(input.minThreshold), costPerUnit: three(input.costPerUnit), salePrice: three(input.salePrice), rollCount: input.rollCount, metersPerRoll: input.metersPerRoll?.toString() || null }).where(eq2(inventoryItems.id, input.id));
-      if (seedQuantity !== null && seedQuantity > 0) await tx.insert(stockMovements).values({ inventoryItemId: input.id, movementType: "opening", quantityChange: three(seedQuantity), quantityBefore: three(quantityBefore), quantityAfter: three(seedQuantity), createdBy: ctx.user.id, notes: "Opening balance derived from roll count \xD7 meters per roll" });
-    });
-    await audit(ctx.user.id, "INVENTORY_UPDATED", "inventoryItem", input.id, { ...input, quantity: quantityAfter, quantityDerivedFromRolls: seedQuantity !== null });
-    return { success: true };
-  }), adjust: protectedProcedure.input(z2.object({ inventoryItemId: z2.number().int(), quantityChange: z2.number(), rollCountChange: z2.number().int().default(0), notes: z2.string().max(1e3) })).mutation(async ({ ctx, input }) => {
-    await access(ctx.user.id, ctx.user.role, inventoryRoles);
-    const db = await dbOrThrow();
-    const item = (await db.select().from(inventoryItems).where(eq2(inventoryItems.id, input.inventoryItemId)).limit(1))[0];
-    if (!item) throw new TRPCError3({ code: "NOT_FOUND", message: "Inventory item not found." });
-    const before = Number(item.quantity);
-    const rollQuantityChange = item.inventoryType === "material" && input.quantityChange === 0 && input.rollCountChange !== 0 && Number(item.metersPerRoll) > 0 ? input.rollCountChange * Number(item.metersPerRoll) : 0;
-    const effectiveQuantityChange = input.quantityChange !== 0 ? input.quantityChange : rollQuantityChange;
-    const after = before + effectiveQuantityChange;
-    const rollCountAfter = Number(item.rollCount || 0) + input.rollCountChange;
-    if (effectiveQuantityChange === 0 && input.rollCountChange === 0) throw new TRPCError3({ code: "BAD_REQUEST", message: "Enter a meter or roll adjustment." });
-    if (after < 0 || rollCountAfter < 0) throw new TRPCError3({ code: "BAD_REQUEST", message: "Stock cannot drop below zero." });
-    await db.update(inventoryItems).set({ quantity: three(after), rollCount: rollCountAfter }).where(eq2(inventoryItems.id, item.id));
-    await db.insert(stockMovements).values({ inventoryItemId: item.id, movementType: "adjustment", quantityChange: three(effectiveQuantityChange), quantityBefore: three(before), quantityAfter: three(after), createdBy: ctx.user.id, notes: input.notes || null });
-    await audit(ctx.user.id, "STOCK_ADJUSTED", "inventoryItem", item.id, input);
-    return { quantity: after };
-  }) }),
+  inventory: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.user.role, ["admin", "sales", "inventory"]);
+      const db = await dbOrThrow();
+      const items = await db.select().from(inventoryItems).where(eq2(inventoryItems.isActive, true)).orderBy(inventoryItems.name);
+      const ids = items.map((item) => item.id);
+      const movementRows = ids.length ? await db.select({ inventoryItemId: stockMovements.inventoryItemId }).from(stockMovements).where(inArray(stockMovements.inventoryItemId, ids)).groupBy(stockMovements.inventoryItemId) : [];
+      const movementIds = new Set(movementRows.map((row) => row.inventoryItemId));
+      return items.map((item) => ({ ...item, quantity: three(effectiveInventoryQuantity({ inventoryType: item.inventoryType, quantity: item.quantity, rollCount: item.rollCount, metersPerRoll: item.metersPerRoll, hasMovement: movementIds.has(item.id) })) }));
+    }),
+    create: protectedProcedure.input(z2.object({ code: z2.string().min(1), name: z2.string().min(2), inventoryType: z2.enum(["material", "item"]).default("material"), category: z2.enum(["fabric", "lining", "buttons", "thread", "accessory", "other"]), color: z2.string(), size: z2.string().optional(), widthInches: z2.number().optional(), unit: z2.string().min(1), minThreshold: z2.number().min(0), costPerUnit: z2.number().min(0), salePrice: z2.number().min(0).default(0), openingQuantity: z2.number().min(0), rollCount: z2.number().int().min(0).default(0), metersPerRoll: z2.number().positive().optional() })).mutation(async ({ ctx, input }) => {
+      await access(ctx.user.id, ctx.user.role, inventoryRoles);
+      const db = await dbOrThrow();
+      const openingQuantity = rollDerivedQuantity(input.inventoryType, input.rollCount, input.metersPerRoll) ?? input.openingQuantity;
+      const result = await db.insert(inventoryItems).values({ ...input, color: input.color || null, size: input.size || null, widthInches: input.widthInches?.toString(), quantity: three(openingQuantity), rollCount: input.rollCount, metersPerRoll: input.metersPerRoll?.toString() || null, minThreshold: three(input.minThreshold), costPerUnit: three(input.costPerUnit), salePrice: three(input.salePrice) }).returning({ id: inventoryItems.id });
+      const itemId = id(result);
+      if (openingQuantity) await db.insert(stockMovements).values({ inventoryItemId: itemId, movementType: "opening", quantityChange: three(openingQuantity), quantityBefore: "0.000", quantityAfter: three(openingQuantity), createdBy: ctx.user.id, notes: "Opening balance" });
+      await audit(ctx.user.id, "INVENTORY_CREATED", "inventoryItem", itemId);
+      return { id: itemId };
+    }),
+    update: protectedProcedure.input(z2.object({ id: z2.number().int().positive(), code: z2.string().min(1), name: z2.string().min(2), inventoryType: z2.enum(["material", "item"]).default("material"), category: z2.enum(["fabric", "lining", "buttons", "thread", "accessory", "other"]), color: z2.string(), size: z2.string().optional(), widthInches: z2.number().optional(), unit: z2.string().min(1), minThreshold: z2.number().min(0), costPerUnit: z2.number().min(0), salePrice: z2.number().min(0).default(0), rollCount: z2.number().int().min(0), metersPerRoll: z2.number().positive().optional() })).mutation(async ({ ctx, input }) => {
+      await access(ctx.user.id, ctx.user.role, inventoryRoles);
+      const db = await dbOrThrow();
+      const item = (await db.select().from(inventoryItems).where(eq2(inventoryItems.id, input.id)).limit(1))[0];
+      if (!item) throw new TRPCError3({ code: "NOT_FOUND", message: "Inventory item not found." });
+      const seedQuantity = Number(item.quantity) <= 0 ? rollDerivedQuantity(input.inventoryType, input.rollCount, input.metersPerRoll) : null;
+      const quantityBefore = Number(item.quantity);
+      const quantityAfter = seedQuantity ?? quantityBefore;
+      await db.transaction(async (tx) => {
+        await tx.update(inventoryItems).set({ code: input.code, name: input.name, inventoryType: input.inventoryType, category: input.category, color: input.color || null, size: input.size || null, widthInches: input.widthInches?.toString(), unit: input.unit, quantity: three(quantityAfter), minThreshold: three(input.minThreshold), costPerUnit: three(input.costPerUnit), salePrice: three(input.salePrice), rollCount: input.rollCount, metersPerRoll: input.metersPerRoll?.toString() || null }).where(eq2(inventoryItems.id, input.id));
+        if (seedQuantity !== null && seedQuantity > 0) await tx.insert(stockMovements).values({ inventoryItemId: input.id, movementType: "opening", quantityChange: three(seedQuantity), quantityBefore: three(quantityBefore), quantityAfter: three(seedQuantity), createdBy: ctx.user.id, notes: "Opening balance derived from roll count \xD7 meters per roll" });
+      });
+      await audit(ctx.user.id, "INVENTORY_UPDATED", "inventoryItem", input.id, { ...input, quantity: quantityAfter, quantityDerivedFromRolls: seedQuantity !== null });
+      return { success: true };
+    }),
+    adjust: protectedProcedure.input(z2.object({ inventoryItemId: z2.number().int(), quantityChange: z2.number(), rollCountChange: z2.number().int().default(0), notes: z2.string().max(1e3) })).mutation(async ({ ctx, input }) => {
+      await access(ctx.user.id, ctx.user.role, inventoryRoles);
+      const db = await dbOrThrow();
+      const item = (await db.select().from(inventoryItems).where(eq2(inventoryItems.id, input.inventoryItemId)).limit(1))[0];
+      if (!item) throw new TRPCError3({ code: "NOT_FOUND", message: "Inventory item not found." });
+      const before = Number(item.quantity);
+      const rollQuantityChange = item.inventoryType === "material" && input.quantityChange === 0 && input.rollCountChange !== 0 && Number(item.metersPerRoll) > 0 ? input.rollCountChange * Number(item.metersPerRoll) : 0;
+      const effectiveQuantityChange = input.quantityChange !== 0 ? input.quantityChange : rollQuantityChange;
+      const after = before + effectiveQuantityChange;
+      const rollCountAfter = Number(item.rollCount || 0) + input.rollCountChange;
+      if (effectiveQuantityChange === 0 && input.rollCountChange === 0) throw new TRPCError3({ code: "BAD_REQUEST", message: "Enter a meter or roll adjustment." });
+      if (after < 0 || rollCountAfter < 0) throw new TRPCError3({ code: "BAD_REQUEST", message: "Stock cannot drop below zero." });
+      await db.update(inventoryItems).set({ quantity: three(after), rollCount: rollCountAfter }).where(eq2(inventoryItems.id, item.id));
+      await db.insert(stockMovements).values({ inventoryItemId: item.id, movementType: "adjustment", quantityChange: three(effectiveQuantityChange), quantityBefore: three(before), quantityAfter: three(after), createdBy: ctx.user.id, notes: input.notes || null });
+      await audit(ctx.user.id, "STOCK_ADJUSTED", "inventoryItem", item.id, input);
+      return { quantity: after };
+    })
+  }),
   services: router({ list: protectedProcedure.query(async ({ ctx }) => {
     await access(ctx.user.id, ctx.user.role, catalogRoles);
     const records = await (await dbOrThrow()).select({ service: services, inventory: inventoryItems }).from(services).leftJoin(inventoryItems, eq2(services.inventoryItemId, inventoryItems.id)).where(eq2(services.isActive, true)).orderBy(services.name);
@@ -1011,7 +1034,7 @@ var erpRouter = router({
 });
 
 // server/pos.ts
-import { and as and2, desc as desc2, eq as eq3, isNull, like as like2, lt, or as or2, sql as sql2 } from "drizzle-orm";
+import { and as and2, desc as desc2, eq as eq3, inArray as inArray2, isNull, like as like2, lt, or as or2, sql as sql2 } from "drizzle-orm";
 import { TRPCError as TRPCError4 } from "@trpc/server";
 import { z as z3 } from "zod";
 var money = (value) => Number(value.toFixed(3)).toFixed(3);
@@ -1188,6 +1211,10 @@ var posRouter = router({
         db.select({ service: services, inventory: inventoryItems }).from(services).leftJoin(inventoryItems, eq3(services.inventoryItemId, inventoryItems.id)).where(eq3(services.isActive, true)).orderBy(services.name),
         db.select().from(inventoryItems).where(eq3(inventoryItems.isActive, true)).orderBy(inventoryItems.name)
       ]);
+      const inventoryIds = inventoryRows.map((item) => item.id);
+      const movementRows = inventoryIds.length ? await db.select({ inventoryItemId: stockMovements.inventoryItemId }).from(stockMovements).where(inArray2(stockMovements.inventoryItemId, inventoryIds)).groupBy(stockMovements.inventoryItemId) : [];
+      const movementIds = new Set(movementRows.map((row) => row.inventoryItemId));
+      const effectiveQuantity = (item) => money(effectiveInventoryQuantity({ inventoryType: item.inventoryType, quantity: item.quantity, rollCount: item.rollCount, metersPerRoll: item.metersPerRoll, hasMovement: movementIds.has(item.id) }));
       const linkedInventoryIds = new Set(serviceRows.map((row) => row.inventory?.id).filter((value) => Boolean(value)));
       const serviceCatalog = serviceRows.map(({ service, inventory }) => ({
         id: service.id,
@@ -1202,7 +1229,7 @@ var posRouter = router({
         unitPrice: service.unitPrice,
         defaultFabricMeters: service.defaultFabricMeters || null,
         isActive: service.isActive,
-        inventory: inventory?.id ? { id: inventory.id, code: inventory.code, name: inventory.name, quantity: inventory.quantity, unit: inventory.unit, isActive: inventory.isActive } : null
+        inventory: inventory?.id ? { id: inventory.id, code: inventory.code, name: inventory.name, quantity: effectiveQuantity(inventory), unit: inventory.unit, isActive: inventory.isActive } : null
       }));
       const inventoryCatalog = inventoryRows.filter((item) => !linkedInventoryIds.has(item.id)).map((item) => ({
         id: item.id,
@@ -1217,7 +1244,7 @@ var posRouter = router({
         unitPrice: Number(item.salePrice) > 0 ? item.salePrice : item.costPerUnit,
         defaultFabricMeters: null,
         isActive: item.isActive,
-        inventory: { id: item.id, code: item.code, name: item.name, quantity: item.quantity, unit: item.unit, isActive: item.isActive }
+        inventory: { id: item.id, code: item.code, name: item.name, quantity: effectiveQuantity(item), unit: item.unit, isActive: item.isActive }
       }));
       return [...serviceCatalog, ...inventoryCatalog];
     })
@@ -1293,8 +1320,11 @@ var posRouter = router({
         if (item.inventoryItemId && !item.serviceId) {
           const stock2 = (await tx.select().from(inventoryItems).where(eq3(inventoryItems.id, item.inventoryItemId)).for("update").limit(1))[0];
           if (!stock2?.isActive) throw new TRPCError4({ code: "BAD_REQUEST", message: "This inventory item is no longer available at POS." });
+          const stockMovement2 = (await tx.select({ id: stockMovements.id }).from(stockMovements).where(eq3(stockMovements.inventoryItemId, stock2.id)).limit(1))[0];
+          const availableQuantity2 = effectiveInventoryQuantity({ inventoryType: stock2.inventoryType, quantity: stock2.quantity, rollCount: stock2.rollCount, metersPerRoll: stock2.metersPerRoll, hasMovement: Boolean(stockMovement2) });
+          const effectiveStock2 = availableQuantity2 === Number(stock2.quantity) ? stock2 : { ...stock2, quantity: money(availableQuantity2) };
           const lineSubtotal2 = item.quantity * item.unitPrice;
-          resolved.push({ serviceId: null, inventoryItemId: stock2.id, name: stock2.name, quantity: item.quantity, unitPrice: item.unitPrice, lineDiscount: Math.min(item.lineDiscount, lineSubtotal2), stockPerSaleUnit: 1, stock: stock2 });
+          resolved.push({ serviceId: null, inventoryItemId: effectiveStock2.id, name: effectiveStock2.name, quantity: item.quantity, unitPrice: item.unitPrice, lineDiscount: Math.min(item.lineDiscount, lineSubtotal2), stockPerSaleUnit: 1, stock: effectiveStock2 });
           continue;
         }
         const catalogItem = (await tx.select().from(services).where(eq3(services.id, item.serviceId)).limit(1))[0];
@@ -1302,9 +1332,12 @@ var posRouter = router({
         if (item.inventoryItemId && item.inventoryItemId !== catalogItem.inventoryItemId) throw new TRPCError4({ code: "BAD_REQUEST", message: `${catalogItem.name} no longer matches the selected inventory item.` });
         const stock = catalogItem.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq3(inventoryItems.id, catalogItem.inventoryItemId)).for("update").limit(1))[0] : null;
         if (catalogItem.inventoryItemId && !stock?.isActive) throw new TRPCError4({ code: "BAD_REQUEST", message: `${catalogItem.name} has no active inventory link.` });
+        const stockMovement = stock ? (await tx.select({ id: stockMovements.id }).from(stockMovements).where(eq3(stockMovements.inventoryItemId, stock.id)).limit(1))[0] : null;
+        const availableQuantity = stock ? effectiveInventoryQuantity({ inventoryType: stock.inventoryType, quantity: stock.quantity, rollCount: stock.rollCount, metersPerRoll: stock.metersPerRoll, hasMovement: Boolean(stockMovement) }) : 0;
+        const effectiveStock = stock ? availableQuantity === Number(stock.quantity) ? stock : { ...stock, quantity: money(availableQuantity) } : null;
         const unitPrice = Number(catalogItem.unitPrice);
         const lineSubtotal = item.quantity * unitPrice;
-        resolved.push({ serviceId: catalogItem.id, inventoryItemId: catalogItem.inventoryItemId, name: catalogItem.name, quantity: item.quantity, unitPrice, lineDiscount: Math.min(item.lineDiscount, lineSubtotal), stockPerSaleUnit: catalogItem.inventoryItemId ? Number(catalogItem.defaultFabricMeters || 1) : 0, stock: stock || null });
+        resolved.push({ serviceId: catalogItem.id, inventoryItemId: catalogItem.inventoryItemId, name: catalogItem.name, quantity: item.quantity, unitPrice, lineDiscount: Math.min(item.lineDiscount, lineSubtotal), stockPerSaleUnit: catalogItem.inventoryItemId ? Number(catalogItem.defaultFabricMeters || 1) : 0, stock: effectiveStock });
       }
       const subtotal = resolved.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
       const lineDiscount = resolved.reduce((sum, item) => sum + item.lineDiscount, 0);
@@ -1531,7 +1564,10 @@ var posRouter = router({
       if (service?.inventoryItemId && !linkedStock?.isActive) throw new TRPCError4({ code: "BAD_REQUEST", message: "The selected tailoring service has no active material link." });
       const stockPerPiece = service?.inventoryItemId ? Number(service.defaultFabricMeters || 1) : 0;
       const stockNeeded = input.quantity * stockPerPiece;
-      if (!input.customerSuppliedFabric && linkedStock && Number(linkedStock.quantity) < stockNeeded) throw new TRPCError4({ code: "BAD_REQUEST", message: `${linkedStock.name} does not have enough stock for this tailoring order.` });
+      const linkedStockMovement = linkedStock ? (await tx.select({ id: stockMovements.id }).from(stockMovements).where(eq3(stockMovements.inventoryItemId, linkedStock.id)).limit(1))[0] : null;
+      const linkedAvailableQuantity = linkedStock ? effectiveInventoryQuantity({ inventoryType: linkedStock.inventoryType, quantity: linkedStock.quantity, rollCount: linkedStock.rollCount, metersPerRoll: linkedStock.metersPerRoll, hasMovement: Boolean(linkedStockMovement) }) : 0;
+      const effectiveLinkedStock = linkedStock ? linkedAvailableQuantity === Number(linkedStock.quantity) ? linkedStock : { ...linkedStock, quantity: money(linkedAvailableQuantity) } : null;
+      if (!input.customerSuppliedFabric && effectiveLinkedStock && linkedAvailableQuantity < stockNeeded) throw new TRPCError4({ code: "BAD_REQUEST", message: `${effectiveLinkedStock.name} does not have enough stock for this tailoring order.` });
       const orderResult = await tx.insert(tailoringOrders).values({ orderNumber, customerId: customer.id, measurementProfileId: measurement.id, assignedTailorId: tailor.id, garmentType: input.garmentType, quantity: input.quantity, dueDate: input.dueDate ? new Date(input.dueDate) : null, price: money(input.orderPrice), customerSuppliedFabric: input.customerSuppliedFabric, fabricNotes: input.fabricNotes || null, status: "confirmed", notes: input.notes || null, productionNotes: input.productionNotes || null, createdBy: ctx.user.id }).returning({ id: tailoringOrders.id });
       const orderId = Number(orderResult[0]?.id || 0);
       const saleResult = await tx.insert(sales).values({ saleNumber, clientReference: input.clientReference || null, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(paymentTax.netAmount), discount: "0.000", vatRate: money(paymentTax.vatRate), vatAmount: money(paymentTax.vatAmount), total: money(input.paymentAmount), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: resolvedSession.id, createdBy: ctx.user.id }).returning({ id: sales.id });
@@ -1539,11 +1575,11 @@ var posRouter = router({
       await tx.update(tailoringOrders).set({ saleId }).where(eq3(tailoringOrders.id, orderId));
       if (input.paymentAmount > 0) await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(input.paymentAmount), reference: `${orderNumber} initial payment`, createdBy: ctx.user.id });
       await tx.insert(saleItems).values({ saleId, serviceId: service?.id || null, inventoryItemId: linkedStock?.id || null, nameSnapshot: `${service?.name || input.garmentType} tailoring order \xB7 ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "unpaid"}`, quantity: money(input.quantity), unitPrice: money(paymentTax.netAmount / input.quantity), lineDiscount: "0.000", lineTotal: money(paymentTax.netAmount), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
-      if (!input.customerSuppliedFabric && linkedStock && stockNeeded > 0) {
-        const before = Number(linkedStock.quantity);
+      if (!input.customerSuppliedFabric && effectiveLinkedStock && stockNeeded > 0) {
+        const before = linkedAvailableQuantity;
         const after = before - stockNeeded;
-        await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq3(inventoryItems.id, linkedStock.id));
-        await tx.insert(stockMovements).values({ inventoryItemId: linkedStock.id, movementType: "sale", quantityChange: money(-stockNeeded), quantityBefore: money(before), quantityAfter: money(after), referenceType: "tailoring_order", referenceId: orderId, createdBy: ctx.user.id, notes: `${orderNumber} \xB7 ${money(stockPerPiece)} ${linkedStock.unit} per piece` });
+        await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq3(inventoryItems.id, effectiveLinkedStock.id));
+        await tx.insert(stockMovements).values({ inventoryItemId: effectiveLinkedStock.id, movementType: "sale", quantityChange: money(-stockNeeded), quantityBefore: money(before), quantityAfter: money(after), referenceType: "tailoring_order", referenceId: orderId, createdBy: ctx.user.id, notes: `${orderNumber} \xB7 ${money(stockPerPiece)} ${effectiveLinkedStock.unit} per piece` });
       }
       const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: paymentStatus, notes: `${orderNumber} \xB7 ${input.garmentType} \xB7 quoted ${money(input.orderPrice)} BHD incl. VAT \xB7 ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "no payment"} collected from POS.${input.customerSuppliedFabric ? " Customer supplied fabric." : " Shop fabric."}` }).returning({ id: invoices.id });
       return { orderId, saleId, invoiceId: Number(invoiceResult[0]?.id || 0) };

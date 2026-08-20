@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { auditLogs, customers, customRoles, discountCodes, inventoryItems, invoices, measurementProfiles, posOrders, posPayments, posSessions, saleItems, sales, services, shopSettings, staffProfiles, stockMovements, tailoringOrders, userBusinessRoles, userCustomRoles } from "../drizzle/schema";
 import { getDb } from "./db";
+import { effectiveInventoryQuantity } from "./inventoryQuantity";
 import { protectedProcedure, router } from "./_core/trpc";
 
 const money = (value: number) => Number(value.toFixed(3)).toFixed(3);
@@ -196,6 +197,10 @@ export const posRouter = router({
         db.select({ service: services, inventory: inventoryItems }).from(services).leftJoin(inventoryItems, eq(services.inventoryItemId, inventoryItems.id)).where(eq(services.isActive, true)).orderBy(services.name),
         db.select().from(inventoryItems).where(eq(inventoryItems.isActive, true)).orderBy(inventoryItems.name),
       ]);
+      const inventoryIds = inventoryRows.map(item => item.id);
+      const movementRows = inventoryIds.length ? await db.select({ inventoryItemId: stockMovements.inventoryItemId }).from(stockMovements).where(inArray(stockMovements.inventoryItemId, inventoryIds)).groupBy(stockMovements.inventoryItemId) : [];
+      const movementIds = new Set(movementRows.map(row => row.inventoryItemId));
+      const effectiveQuantity = (item: typeof inventoryRows[number]) => money(effectiveInventoryQuantity({ inventoryType: item.inventoryType, quantity: item.quantity, rollCount: item.rollCount, metersPerRoll: item.metersPerRoll, hasMovement: movementIds.has(item.id) }));
       const linkedInventoryIds = new Set(serviceRows.map(row => row.inventory?.id).filter((value): value is number => Boolean(value)));
       const serviceCatalog = serviceRows.map(({ service, inventory }) => ({
         id: service.id,
@@ -210,7 +215,7 @@ export const posRouter = router({
         unitPrice: service.unitPrice,
         defaultFabricMeters: service.defaultFabricMeters || null,
         isActive: service.isActive,
-        inventory: inventory?.id ? { id: inventory.id, code: inventory.code, name: inventory.name, quantity: inventory.quantity, unit: inventory.unit, isActive: inventory.isActive } : null,
+        inventory: inventory?.id ? { id: inventory.id, code: inventory.code, name: inventory.name, quantity: effectiveQuantity(inventory), unit: inventory.unit, isActive: inventory.isActive } : null,
       }));
       const inventoryCatalog = inventoryRows.filter(item => !linkedInventoryIds.has(item.id)).map(item => ({
         id: item.id,
@@ -225,7 +230,7 @@ export const posRouter = router({
         unitPrice: Number(item.salePrice) > 0 ? item.salePrice : item.costPerUnit,
         defaultFabricMeters: null,
         isActive: item.isActive,
-        inventory: { id: item.id, code: item.code, name: item.name, quantity: item.quantity, unit: item.unit, isActive: item.isActive },
+        inventory: { id: item.id, code: item.code, name: item.name, quantity: effectiveQuantity(item), unit: item.unit, isActive: item.isActive },
       }));
       return [...serviceCatalog, ...inventoryCatalog];
     }),
@@ -301,8 +306,11 @@ export const posRouter = router({
         if (item.inventoryItemId && !item.serviceId) {
           const stock = (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, item.inventoryItemId)).for("update").limit(1))[0];
           if (!stock?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "This inventory item is no longer available at POS." });
+          const stockMovement = (await tx.select({ id: stockMovements.id }).from(stockMovements).where(eq(stockMovements.inventoryItemId, stock.id)).limit(1))[0];
+          const availableQuantity = effectiveInventoryQuantity({ inventoryType: stock.inventoryType, quantity: stock.quantity, rollCount: stock.rollCount, metersPerRoll: stock.metersPerRoll, hasMovement: Boolean(stockMovement) });
+          const effectiveStock = availableQuantity === Number(stock.quantity) ? stock : { ...stock, quantity: money(availableQuantity) };
           const lineSubtotal = item.quantity * item.unitPrice;
-          resolved.push({ serviceId: null, inventoryItemId: stock.id, name: stock.name, quantity: item.quantity, unitPrice: item.unitPrice, lineDiscount: Math.min(item.lineDiscount, lineSubtotal), stockPerSaleUnit: 1, stock });
+          resolved.push({ serviceId: null, inventoryItemId: effectiveStock.id, name: effectiveStock.name, quantity: item.quantity, unitPrice: item.unitPrice, lineDiscount: Math.min(item.lineDiscount, lineSubtotal), stockPerSaleUnit: 1, stock: effectiveStock });
           continue;
         }
         const catalogItem = (await tx.select().from(services).where(eq(services.id, item.serviceId!)).limit(1))[0];
@@ -310,9 +318,12 @@ export const posRouter = router({
         if (item.inventoryItemId && item.inventoryItemId !== catalogItem.inventoryItemId) throw new TRPCError({ code: "BAD_REQUEST", message: `${catalogItem.name} no longer matches the selected inventory item.` });
         const stock = catalogItem.inventoryItemId ? (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, catalogItem.inventoryItemId)).for("update").limit(1))[0] : null;
         if (catalogItem.inventoryItemId && !stock?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: `${catalogItem.name} has no active inventory link.` });
+        const stockMovement = stock ? (await tx.select({ id: stockMovements.id }).from(stockMovements).where(eq(stockMovements.inventoryItemId, stock.id)).limit(1))[0] : null;
+        const availableQuantity = stock ? effectiveInventoryQuantity({ inventoryType: stock.inventoryType, quantity: stock.quantity, rollCount: stock.rollCount, metersPerRoll: stock.metersPerRoll, hasMovement: Boolean(stockMovement) }) : 0;
+        const effectiveStock = stock ? (availableQuantity === Number(stock.quantity) ? stock : { ...stock, quantity: money(availableQuantity) }) : null;
         const unitPrice = Number(catalogItem.unitPrice);
         const lineSubtotal = item.quantity * unitPrice;
-        resolved.push({ serviceId: catalogItem.id, inventoryItemId: catalogItem.inventoryItemId, name: catalogItem.name, quantity: item.quantity, unitPrice, lineDiscount: Math.min(item.lineDiscount, lineSubtotal), stockPerSaleUnit: catalogItem.inventoryItemId ? Number(catalogItem.defaultFabricMeters || 1) : 0, stock: stock || null });
+        resolved.push({ serviceId: catalogItem.id, inventoryItemId: catalogItem.inventoryItemId, name: catalogItem.name, quantity: item.quantity, unitPrice, lineDiscount: Math.min(item.lineDiscount, lineSubtotal), stockPerSaleUnit: catalogItem.inventoryItemId ? Number(catalogItem.defaultFabricMeters || 1) : 0, stock: effectiveStock });
       }
       const subtotal = resolved.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
       const lineDiscount = resolved.reduce((sum, item) => sum + item.lineDiscount, 0);
@@ -527,17 +538,20 @@ export const posRouter = router({
       if (service?.inventoryItemId && !linkedStock?.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "The selected tailoring service has no active material link." });
       const stockPerPiece = service?.inventoryItemId ? Number(service.defaultFabricMeters || 1) : 0;
       const stockNeeded = input.quantity * stockPerPiece;
-      if (!input.customerSuppliedFabric && linkedStock && Number(linkedStock.quantity) < stockNeeded) throw new TRPCError({ code: "BAD_REQUEST", message: `${linkedStock.name} does not have enough stock for this tailoring order.` });
+      const linkedStockMovement = linkedStock ? (await tx.select({ id: stockMovements.id }).from(stockMovements).where(eq(stockMovements.inventoryItemId, linkedStock.id)).limit(1))[0] : null;
+      const linkedAvailableQuantity = linkedStock ? effectiveInventoryQuantity({ inventoryType: linkedStock.inventoryType, quantity: linkedStock.quantity, rollCount: linkedStock.rollCount, metersPerRoll: linkedStock.metersPerRoll, hasMovement: Boolean(linkedStockMovement) }) : 0;
+      const effectiveLinkedStock = linkedStock ? (linkedAvailableQuantity === Number(linkedStock.quantity) ? linkedStock : { ...linkedStock, quantity: money(linkedAvailableQuantity) }) : null;
+      if (!input.customerSuppliedFabric && effectiveLinkedStock && linkedAvailableQuantity < stockNeeded) throw new TRPCError({ code: "BAD_REQUEST", message: `${effectiveLinkedStock.name} does not have enough stock for this tailoring order.` });
       const orderResult = await tx.insert(tailoringOrders).values({ orderNumber, customerId: customer.id, measurementProfileId: measurement.id, assignedTailorId: tailor.id, garmentType: input.garmentType, quantity: input.quantity, dueDate: input.dueDate ? new Date(input.dueDate) : null, price: money(input.orderPrice), customerSuppliedFabric: input.customerSuppliedFabric, fabricNotes: input.fabricNotes || null, status: "confirmed", notes: input.notes || null, productionNotes: input.productionNotes || null, createdBy: ctx.user.id }).returning({ id: tailoringOrders.id });
       const orderId = Number(orderResult[0]?.id || 0);
       const saleResult = await tx.insert(sales).values({ saleNumber, clientReference: input.clientReference || null, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(paymentTax.netAmount), discount: "0.000", vatRate: money(paymentTax.vatRate), vatAmount: money(paymentTax.vatAmount), total: money(input.paymentAmount), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: resolvedSession.id, createdBy: ctx.user.id }).returning({ id: sales.id });
       const saleId = Number(saleResult[0]?.id || 0); await tx.update(tailoringOrders).set({ saleId }).where(eq(tailoringOrders.id, orderId)); if (input.paymentAmount > 0) await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(input.paymentAmount), reference: `${orderNumber} initial payment`, createdBy: ctx.user.id });
       await tx.insert(saleItems).values({ saleId, serviceId: service?.id || null, inventoryItemId: linkedStock?.id || null, nameSnapshot: `${service?.name || input.garmentType} tailoring order · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "unpaid"}`, quantity: money(input.quantity), unitPrice: money(paymentTax.netAmount / input.quantity), lineDiscount: "0.000", lineTotal: money(paymentTax.netAmount), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
-      if (!input.customerSuppliedFabric && linkedStock && stockNeeded > 0) {
-        const before = Number(linkedStock.quantity);
+      if (!input.customerSuppliedFabric && effectiveLinkedStock && stockNeeded > 0) {
+        const before = linkedAvailableQuantity;
         const after = before - stockNeeded;
-        await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq(inventoryItems.id, linkedStock.id));
-        await tx.insert(stockMovements).values({ inventoryItemId: linkedStock.id, movementType: "sale", quantityChange: money(-stockNeeded), quantityBefore: money(before), quantityAfter: money(after), referenceType: "tailoring_order", referenceId: orderId, createdBy: ctx.user.id, notes: `${orderNumber} · ${money(stockPerPiece)} ${linkedStock.unit} per piece` });
+        await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq(inventoryItems.id, effectiveLinkedStock.id));
+        await tx.insert(stockMovements).values({ inventoryItemId: effectiveLinkedStock.id, movementType: "sale", quantityChange: money(-stockNeeded), quantityBefore: money(before), quantityAfter: money(after), referenceType: "tailoring_order", referenceId: orderId, createdBy: ctx.user.id, notes: `${orderNumber} · ${money(stockPerPiece)} ${effectiveLinkedStock.unit} per piece` });
       }
       const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: paymentStatus, notes: `${orderNumber} · ${input.garmentType} · quoted ${money(input.orderPrice)} BHD incl. VAT · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "no payment"} collected from POS.${input.customerSuppliedFabric ? " Customer supplied fabric." : " Shop fabric."}` }).returning({ id: invoices.id });
       return { orderId, saleId, invoiceId: Number(invoiceResult[0]?.id || 0) };
