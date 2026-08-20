@@ -359,6 +359,7 @@ var customPermissionValues = ["dashboard", "customers", "sales", "inventory", "p
 var legacyPermissions = { admin: ["dashboard", "customers", "sales", "inventory", "payroll", "production"], sales: ["dashboard", "customers", "sales"], tailor: ["customers", "production"], inventory: ["inventory"], payroll: ["payroll"] };
 var customRoleCanAccess = (permissions, allowed) => allowed.filter((role) => role !== "admin").some((role) => legacyPermissions[role].some((permission) => permissions.includes(permission)));
 var three = (value) => value.toFixed(3);
+var rollDerivedQuantity = (inventoryType, rollCount, metersPerRoll) => inventoryType === "material" && rollCount > 0 && metersPerRoll && metersPerRoll > 0 ? rollCount * metersPerRoll : null;
 var getMonthBounds = (payPeriod) => {
   const start = /* @__PURE__ */ new Date(`${payPeriod}-01T00:00:00.000Z`);
   const end = new Date(start);
@@ -558,18 +559,25 @@ var erpRouter = router({
   }), create: protectedProcedure.input(z2.object({ code: z2.string().min(1), name: z2.string().min(2), inventoryType: z2.enum(["material", "item"]).default("material"), category: z2.enum(["fabric", "lining", "buttons", "thread", "accessory", "other"]), color: z2.string(), size: z2.string().optional(), widthInches: z2.number().optional(), unit: z2.string().min(1), minThreshold: z2.number().min(0), costPerUnit: z2.number().min(0), salePrice: z2.number().min(0).default(0), openingQuantity: z2.number().min(0), rollCount: z2.number().int().min(0).default(0), metersPerRoll: z2.number().positive().optional() })).mutation(async ({ ctx, input }) => {
     await access(ctx.user.id, ctx.user.role, inventoryRoles);
     const db = await dbOrThrow();
-    const result = await db.insert(inventoryItems).values({ ...input, color: input.color || null, size: input.size || null, widthInches: input.widthInches?.toString(), quantity: three(input.openingQuantity), rollCount: input.rollCount, metersPerRoll: input.metersPerRoll?.toString() || null, minThreshold: three(input.minThreshold), costPerUnit: three(input.costPerUnit), salePrice: three(input.salePrice) }).returning({ id: inventoryItems.id });
+    const openingQuantity = rollDerivedQuantity(input.inventoryType, input.rollCount, input.metersPerRoll) ?? input.openingQuantity;
+    const result = await db.insert(inventoryItems).values({ ...input, color: input.color || null, size: input.size || null, widthInches: input.widthInches?.toString(), quantity: three(openingQuantity), rollCount: input.rollCount, metersPerRoll: input.metersPerRoll?.toString() || null, minThreshold: three(input.minThreshold), costPerUnit: three(input.costPerUnit), salePrice: three(input.salePrice) }).returning({ id: inventoryItems.id });
     const itemId = id(result);
-    if (input.openingQuantity) await db.insert(stockMovements).values({ inventoryItemId: itemId, movementType: "opening", quantityChange: three(input.openingQuantity), quantityBefore: "0.000", quantityAfter: three(input.openingQuantity), createdBy: ctx.user.id, notes: "Opening balance" });
+    if (openingQuantity) await db.insert(stockMovements).values({ inventoryItemId: itemId, movementType: "opening", quantityChange: three(openingQuantity), quantityBefore: "0.000", quantityAfter: three(openingQuantity), createdBy: ctx.user.id, notes: "Opening balance" });
     await audit(ctx.user.id, "INVENTORY_CREATED", "inventoryItem", itemId);
     return { id: itemId };
   }), update: protectedProcedure.input(z2.object({ id: z2.number().int().positive(), code: z2.string().min(1), name: z2.string().min(2), inventoryType: z2.enum(["material", "item"]).default("material"), category: z2.enum(["fabric", "lining", "buttons", "thread", "accessory", "other"]), color: z2.string(), size: z2.string().optional(), widthInches: z2.number().optional(), unit: z2.string().min(1), minThreshold: z2.number().min(0), costPerUnit: z2.number().min(0), salePrice: z2.number().min(0).default(0), rollCount: z2.number().int().min(0), metersPerRoll: z2.number().positive().optional() })).mutation(async ({ ctx, input }) => {
     await access(ctx.user.id, ctx.user.role, inventoryRoles);
     const db = await dbOrThrow();
-    const item = (await db.select({ id: inventoryItems.id }).from(inventoryItems).where(eq2(inventoryItems.id, input.id)).limit(1))[0];
+    const item = (await db.select().from(inventoryItems).where(eq2(inventoryItems.id, input.id)).limit(1))[0];
     if (!item) throw new TRPCError3({ code: "NOT_FOUND", message: "Inventory item not found." });
-    await db.update(inventoryItems).set({ code: input.code, name: input.name, inventoryType: input.inventoryType, category: input.category, color: input.color || null, size: input.size || null, widthInches: input.widthInches?.toString(), unit: input.unit, minThreshold: three(input.minThreshold), costPerUnit: three(input.costPerUnit), salePrice: three(input.salePrice), rollCount: input.rollCount, metersPerRoll: input.metersPerRoll?.toString() || null }).where(eq2(inventoryItems.id, input.id));
-    await audit(ctx.user.id, "INVENTORY_UPDATED", "inventoryItem", input.id, input);
+    const seedQuantity = Number(item.quantity) <= 0 ? rollDerivedQuantity(input.inventoryType, input.rollCount, input.metersPerRoll) : null;
+    const quantityBefore = Number(item.quantity);
+    const quantityAfter = seedQuantity ?? quantityBefore;
+    await db.transaction(async (tx) => {
+      await tx.update(inventoryItems).set({ code: input.code, name: input.name, inventoryType: input.inventoryType, category: input.category, color: input.color || null, size: input.size || null, widthInches: input.widthInches?.toString(), unit: input.unit, quantity: three(quantityAfter), minThreshold: three(input.minThreshold), costPerUnit: three(input.costPerUnit), salePrice: three(input.salePrice), rollCount: input.rollCount, metersPerRoll: input.metersPerRoll?.toString() || null }).where(eq2(inventoryItems.id, input.id));
+      if (seedQuantity !== null && seedQuantity > 0) await tx.insert(stockMovements).values({ inventoryItemId: input.id, movementType: "opening", quantityChange: three(seedQuantity), quantityBefore: three(quantityBefore), quantityAfter: three(seedQuantity), createdBy: ctx.user.id, notes: "Opening balance derived from roll count \xD7 meters per roll" });
+    });
+    await audit(ctx.user.id, "INVENTORY_UPDATED", "inventoryItem", input.id, { ...input, quantity: quantityAfter, quantityDerivedFromRolls: seedQuantity !== null });
     return { success: true };
   }), adjust: protectedProcedure.input(z2.object({ inventoryItemId: z2.number().int(), quantityChange: z2.number(), rollCountChange: z2.number().int().default(0), notes: z2.string().max(1e3) })).mutation(async ({ ctx, input }) => {
     await access(ctx.user.id, ctx.user.role, inventoryRoles);
@@ -577,12 +585,14 @@ var erpRouter = router({
     const item = (await db.select().from(inventoryItems).where(eq2(inventoryItems.id, input.inventoryItemId)).limit(1))[0];
     if (!item) throw new TRPCError3({ code: "NOT_FOUND", message: "Inventory item not found." });
     const before = Number(item.quantity);
-    const after = before + input.quantityChange;
+    const rollQuantityChange = item.inventoryType === "material" && input.quantityChange === 0 && input.rollCountChange !== 0 && Number(item.metersPerRoll) > 0 ? input.rollCountChange * Number(item.metersPerRoll) : 0;
+    const effectiveQuantityChange = input.quantityChange !== 0 ? input.quantityChange : rollQuantityChange;
+    const after = before + effectiveQuantityChange;
     const rollCountAfter = Number(item.rollCount || 0) + input.rollCountChange;
-    if (input.quantityChange === 0 && input.rollCountChange === 0) throw new TRPCError3({ code: "BAD_REQUEST", message: "Enter a meter or roll adjustment." });
+    if (effectiveQuantityChange === 0 && input.rollCountChange === 0) throw new TRPCError3({ code: "BAD_REQUEST", message: "Enter a meter or roll adjustment." });
     if (after < 0 || rollCountAfter < 0) throw new TRPCError3({ code: "BAD_REQUEST", message: "Stock cannot drop below zero." });
     await db.update(inventoryItems).set({ quantity: three(after), rollCount: rollCountAfter }).where(eq2(inventoryItems.id, item.id));
-    await db.insert(stockMovements).values({ inventoryItemId: item.id, movementType: "adjustment", quantityChange: three(input.quantityChange), quantityBefore: three(before), quantityAfter: three(after), createdBy: ctx.user.id, notes: input.notes || null });
+    await db.insert(stockMovements).values({ inventoryItemId: item.id, movementType: "adjustment", quantityChange: three(effectiveQuantityChange), quantityBefore: three(before), quantityAfter: three(after), createdBy: ctx.user.id, notes: input.notes || null });
     await audit(ctx.user.id, "STOCK_ADJUSTED", "inventoryItem", item.id, input);
     return { quantity: after };
   }) }),

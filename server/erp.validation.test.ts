@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TrpcContext } from "./_core/context";
 import { appRouter } from "./routers";
-import { getMonthWindow } from "./erp";
+import { getMonthWindow, rollDerivedQuantity } from "./erp";
 
 function context(): TrpcContext {
   return { user: { id: 1, openId: "test-user", name: "Test User", email: "test@example.com", loginMethod: "manus", role: "user", createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() }, req: {} as TrpcContext["req"], res: {} as TrpcContext["res"] };
@@ -19,6 +19,12 @@ describe("ERP input contracts", () => {
   it("does not expose manual-sale creation through Sales History", async () => {
     const caller = appRouter.createCaller(context()) as any;
     await expect(caller.erp.salesHistory.createManual({})).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+  it("derives material availability from rolls and meters per roll", () => {
+    expect(rollDerivedQuantity("material", 10, 20)).toBe(200);
+    expect(rollDerivedQuantity("material", 0, 20)).toBeNull();
+    expect(rollDerivedQuantity("material", 10)).toBeNull();
+    expect(rollDerivedQuantity("item", 10, 20)).toBeNull();
   });
   it("calculates inclusive UTC month boundaries for monthly reporting", () => {
     const window = getMonthWindow("2026-02");
