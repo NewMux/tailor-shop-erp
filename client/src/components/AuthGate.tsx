@@ -6,11 +6,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export default function AuthGate({ callbackError }: { callbackError?: string | null }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+type AuthGateProps = {
+  callbackError?: string | null;
+  recoveryMode?: boolean;
+  onRecoveryComplete?: () => Promise<void> | void;
+};
+
+export default function AuthGate({ callbackError, recoveryMode = false, onRecoveryComplete }: AuthGateProps) {
+  const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [recoveryPassword, setRecoveryPassword] = useState("");
+  const [recoveryConfirmation, setRecoveryConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -23,7 +31,26 @@ export default function AuthGate({ callbackError }: { callbackError?: string | n
     setPending(true);
 
     try {
-      if (mode === "login") {
+      if (recoveryMode) {
+        if (recoveryPassword !== recoveryConfirmation) {
+          setError("The passwords do not match.");
+          return;
+        }
+        const { error: updateError } = await supabase.auth.updateUser({ password: recoveryPassword });
+        if (updateError) throw updateError;
+        setNotice("Password updated. Opening your ERP workspace…");
+        await onRecoveryComplete?.();
+        return;
+      }
+
+      if (mode === "forgot") {
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: window.location.origin,
+        });
+        if (resetError) throw resetError;
+        setNotice("If an account exists for this email, a password-reset link has been sent.");
+        setMode("login");
+      } else if (mode === "login") {
         const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
         if (signInError) throw signInError;
       } else {
@@ -34,7 +61,6 @@ export default function AuthGate({ callbackError }: { callbackError?: string | n
         });
         if (signUpError) throw signUpError;
         if (!data.session) {
-          // Email confirmation is required before the account can sign in.
           setNotice("Check your email to confirm your account, then sign in below.");
           setMode("login");
         }
@@ -52,76 +78,126 @@ export default function AuthGate({ callbackError }: { callbackError?: string | n
         <Button data-no-translate type="button" variant="outline" size="sm" className="absolute right-5 top-5 rounded-xl" onClick={toggleLanguage}>{isArabic ? "EN" : "عربي"}</Button>
         <Scissors className="mx-auto h-8 w-8 text-primary" />
         <h1 className="mt-5 text-center text-2xl font-semibold">
-          {mode === "login" ? "Sign in to Al-Mamlaka ERP" : "Create your account"}
+          {recoveryMode ? "Set a new password" : mode === "login" ? "Sign in to Al-Mamlaka ERP" : mode === "forgot" ? "Reset your password" : "Create your account"}
         </h1>
         <p className="mt-2 text-center text-sm text-muted-foreground">
-          {mode === "login"
-            ? "Use the email and password set up for your staff account."
-            : "The first account registered with the shop owner's email becomes the administrator."}
+          {recoveryMode
+            ? "For your security, choose a new password before entering the ERP workspace."
+            : mode === "login"
+              ? "Use the email and password set up for your staff account."
+              : mode === "forgot"
+                ? "Enter your staff email and we will send a secure reset link."
+                : "The first account registered with the shop owner's email becomes the administrator."}
         </p>
 
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
-          {mode === "register" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="name">Full name</Label>
-              <Input
-                id="name"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                required
-                minLength={2}
-                maxLength={160}
-                autoComplete="name"
-              />
-            </div>
+          {recoveryMode ? (
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="recovery-password">New password</Label>
+                <Input
+                  id="recovery-password"
+                  type="password"
+                  value={recoveryPassword}
+                  onChange={e => setRecoveryPassword(e.target.value)}
+                  required
+                  minLength={8}
+                  maxLength={200}
+                  autoComplete="new-password"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="recovery-confirmation">Confirm new password</Label>
+                <Input
+                  id="recovery-confirmation"
+                  type="password"
+                  value={recoveryConfirmation}
+                  onChange={e => setRecoveryConfirmation(e.target.value)}
+                  required
+                  minLength={8}
+                  maxLength={200}
+                  autoComplete="new-password"
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              {mode === "register" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="name">Full name</Label>
+                  <Input
+                    id="name"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    required
+                    minLength={2}
+                    maxLength={160}
+                    autoComplete="name"
+                  />
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  required
+                  maxLength={320}
+                  autoComplete="email"
+                />
+              </div>
+              {mode !== "forgot" && <div className="space-y-1.5">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  required
+                  minLength={8}
+                  maxLength={200}
+                  autoComplete={mode === "login" ? "current-password" : "new-password"}
+                />
+              </div>}
+            </>
           )}
-          <div className="space-y-1.5">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-              maxLength={320}
-              autoComplete="email"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              required
-              minLength={8}
-              maxLength={200}
-              autoComplete={mode === "login" ? "current-password" : "new-password"}
-            />
-          </div>
 
-          {callbackError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm leading-5 text-amber-950">{callbackError}</div>}
+          {!recoveryMode && callbackError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm leading-5 text-amber-950">{callbackError}</div>}
           {notice && <p className="text-sm text-emerald-600">{notice}</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
 
           <Button type="submit" className="w-full" disabled={pending}>
             {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {mode === "login" ? "Sign in" : "Create account"}
+            {recoveryMode ? "Update password" : mode === "login" ? "Sign in" : mode === "forgot" ? "Send reset link" : "Create account"}
           </Button>
         </form>
 
-        <button
-          type="button"
-          className="mt-5 w-full text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
-          onClick={() => {
-            setMode(mode === "login" ? "register" : "login");
-            setError(null);
-            setNotice(null);
-          }}
-        >
-          {mode === "login" ? "Need an account? Register" : "Already have an account? Sign in"}
-        </button>
+        {!recoveryMode && <div className="mt-5 space-y-2 text-center text-sm text-muted-foreground">
+          {mode === "login" && <button
+            type="button"
+            className="block w-full underline-offset-4 hover:underline"
+            onClick={() => {
+              setMode("forgot");
+              setError(null);
+              setNotice(null);
+            }}
+          >
+            Forgot password?
+          </button>}
+          <button
+            type="button"
+            className="block w-full underline-offset-4 hover:underline"
+            onClick={() => {
+              setMode(mode === "login" || mode === "forgot" ? "register" : "login");
+              setError(null);
+              setNotice(null);
+            }}
+          >
+            {mode === "register" ? "Already have an account? Sign in" : "Need an account? Register"}
+          </button>
+        </div>}
       </div>
     </main>
   );

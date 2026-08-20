@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import { getAuthCallbackErrorMessage } from "@/lib/authCallback";
+import { getAuthCallbackErrorMessage, isPasswordRecoveryCallback } from "@/lib/authCallback";
 import { trpc } from "@/lib/trpc";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -24,12 +24,13 @@ export function useAuth() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [hasSession, setHasSession] = useState<boolean | null>(null);
   const [callbackError, setCallbackError] = useState<string | null>(null);
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [cachedUser, setCachedUser] = useState<CachedUser | null>(() => readCachedUser());
 
   // Do not request the ERP profile until Supabase has restored local session
   // storage. Otherwise the initial auth.me request can be cached as anonymous.
   const meQuery = trpc.auth.me.useQuery(undefined, {
-    enabled: hasSession === true,
+    enabled: hasSession === true && !recoveryMode,
     retry: false,
     refetchOnWindowFocus: false,
   });
@@ -37,9 +38,11 @@ export function useAuth() {
   useEffect(() => {
     let active = true;
     const callbackMessage = getAuthCallbackErrorMessage(window.location.hash);
+    const recoveryCallback = isPasswordRecoveryCallback(window.location.hash);
 
     if (callbackMessage) {
       setCallbackError(callbackMessage);
+      setRecoveryMode(false);
       window.history.replaceState(null, document.title, `${window.location.pathname}${window.location.search}`);
       void supabase.auth.signOut({ scope: "local" }).finally(() => {
         if (!active) return;
@@ -49,17 +52,29 @@ export function useAuth() {
         utils.auth.me.setData(undefined, null);
       });
     } else {
+      if (recoveryCallback) setRecoveryMode(true);
       void supabase.auth.getSession().then(({ data }) => {
-        if (active) setHasSession(Boolean(data.session));
+        if (!active) return;
+        setHasSession(Boolean(data.session));
+        if (recoveryCallback && data.session) {
+          window.history.replaceState(null, document.title, `${window.location.pathname}${window.location.search}`);
+        } else if (!data.session) {
+          setRecoveryMode(false);
+        }
       });
     }
 
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       setHasSession(Boolean(session));
-      if (session) {
+      if (event === "PASSWORD_RECOVERY") {
+        setRecoveryMode(true);
+        setCachedUser(null);
+        utils.auth.me.setData(undefined, null);
+      } else if (session) {
         setCallbackError(null);
         void utils.auth.me.invalidate();
       } else {
+        setRecoveryMode(false);
         setCachedUser(null);
         try { window.localStorage.removeItem(CACHED_USER_KEY); } catch { /* Ignore storage failures during auth transitions. */ }
         utils.auth.me.setData(undefined, null);
@@ -92,6 +107,12 @@ export function useAuth() {
     }
   }, [utils]);
 
+  const completeRecovery = useCallback(async () => {
+    setRecoveryMode(false);
+    setCallbackError(null);
+    await utils.auth.me.invalidate();
+  }, [utils]);
+
   const offlineFallback = typeof navigator !== "undefined" && !navigator.onLine && meQuery.isError ? cachedUser : null;
   const effectiveUser = meQuery.data ?? offlineFallback;
   const state = useMemo(
@@ -109,5 +130,7 @@ export function useAuth() {
     refresh: () => meQuery.refetch(),
     logout,
     callbackError,
+    recoveryMode,
+    completeRecovery,
   };
 }

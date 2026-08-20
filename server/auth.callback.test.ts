@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAuthCallbackErrorMessage } from "../client/src/lib/authCallback";
+import { getAuthCallbackErrorMessage, isPasswordRecoveryCallback } from "../client/src/lib/authCallback";
 
 describe("auth callback errors", () => {
   it("recognizes an expired OTP link", () => {
@@ -13,5 +13,11 @@ describe("auth callback errors", () => {
   it("does not treat a normal auth hash as an error", () => {
     expect(getAuthCallbackErrorMessage("#access_token=token&type=recovery")).toBeNull();
     expect(getAuthCallbackErrorMessage("")).toBeNull();
+  });
+
+  it("identifies a Supabase recovery callback separately from ordinary sign-in", () => {
+    expect(isPasswordRecoveryCallback("#access_token=token&type=recovery")).toBe(true);
+    expect(isPasswordRecoveryCallback("#access_token=token&type=signup")).toBe(false);
+    expect(isPasswordRecoveryCallback("#type=recovery")).toBe(false);
   });
 });

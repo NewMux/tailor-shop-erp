@@ -1,3 +1,10 @@
+export function isPasswordRecoveryCallback(hash: string): boolean {
+  const rawHash = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!rawHash) return false;
+  const params = new URLSearchParams(rawHash);
+  return params.get("type") === "recovery" && Boolean(params.get("access_token"));
+}
+
 export function getAuthCallbackErrorMessage(hash: string): string | null {
   const rawHash = hash.startsWith("#") ? hash.slice(1) : hash;
   if (!rawHash) return null;
