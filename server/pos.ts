@@ -123,7 +123,7 @@ const tailoringCheckoutInput = z.object({
   quantity: z.number().int().min(1).max(20),
   dueDate: z.string().optional(),
   orderPrice: z.number().positive(),
-  paymentAmount: z.number().positive(),
+  paymentAmount: z.number().min(0).max(1000000),
   customerSuppliedFabric: z.boolean().default(false),
   fabricNotes: z.string().max(2000).optional(),
   paymentMethod,
@@ -511,7 +511,7 @@ export const posRouter = router({
     const shop = (await db.select().from(shopSettings).limit(1))[0];
     const orderNumber = `TO-${Date.now()}`;
     const saleNumber = `POS-TO-${Date.now()}`;
-    const paymentStatus = input.paymentAmount >= input.orderPrice - 0.001 ? "paid" : "partial" as const;
+    const paymentStatus = input.paymentAmount >= input.orderPrice - 0.001 ? "paid" : input.paymentAmount > 0 ? "partial" : "unpaid" as const;
     const paymentTax = taxFromGross(input.paymentAmount, shop);
     const transaction = await db.transaction(async tx => {
       const resolvedSession = await resolveSession(tx, input.sessionId, ctx.user.id);
@@ -531,15 +531,15 @@ export const posRouter = router({
       const orderResult = await tx.insert(tailoringOrders).values({ orderNumber, customerId: customer.id, measurementProfileId: measurement.id, assignedTailorId: tailor.id, garmentType: input.garmentType, quantity: input.quantity, dueDate: input.dueDate ? new Date(input.dueDate) : null, price: money(input.orderPrice), customerSuppliedFabric: input.customerSuppliedFabric, fabricNotes: input.fabricNotes || null, status: "confirmed", notes: input.notes || null, productionNotes: input.productionNotes || null, createdBy: ctx.user.id }).returning({ id: tailoringOrders.id });
       const orderId = Number(orderResult[0]?.id || 0);
       const saleResult = await tx.insert(sales).values({ saleNumber, clientReference: input.clientReference || null, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(paymentTax.netAmount), discount: "0.000", vatRate: money(paymentTax.vatRate), vatAmount: money(paymentTax.vatAmount), total: money(input.paymentAmount), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: resolvedSession.id, createdBy: ctx.user.id }).returning({ id: sales.id });
-      const saleId = Number(saleResult[0]?.id || 0); await tx.update(tailoringOrders).set({ saleId }).where(eq(tailoringOrders.id, orderId)); await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(input.paymentAmount), reference: `${orderNumber} initial payment`, createdBy: ctx.user.id });
-      await tx.insert(saleItems).values({ saleId, serviceId: service?.id || null, inventoryItemId: linkedStock?.id || null, nameSnapshot: `${service?.name || input.garmentType} tailoring order · ${paymentStatus === "paid" ? "full payment" : "deposit"}`, quantity: money(input.quantity), unitPrice: money(paymentTax.netAmount / input.quantity), lineDiscount: "0.000", lineTotal: money(paymentTax.netAmount), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
+      const saleId = Number(saleResult[0]?.id || 0); await tx.update(tailoringOrders).set({ saleId }).where(eq(tailoringOrders.id, orderId)); if (input.paymentAmount > 0) await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(input.paymentAmount), reference: `${orderNumber} initial payment`, createdBy: ctx.user.id });
+      await tx.insert(saleItems).values({ saleId, serviceId: service?.id || null, inventoryItemId: linkedStock?.id || null, nameSnapshot: `${service?.name || input.garmentType} tailoring order · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "unpaid"}`, quantity: money(input.quantity), unitPrice: money(paymentTax.netAmount / input.quantity), lineDiscount: "0.000", lineTotal: money(paymentTax.netAmount), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
       if (!input.customerSuppliedFabric && linkedStock && stockNeeded > 0) {
         const before = Number(linkedStock.quantity);
         const after = before - stockNeeded;
         await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq(inventoryItems.id, linkedStock.id));
         await tx.insert(stockMovements).values({ inventoryItemId: linkedStock.id, movementType: "sale", quantityChange: money(-stockNeeded), quantityBefore: money(before), quantityAfter: money(after), referenceType: "tailoring_order", referenceId: orderId, createdBy: ctx.user.id, notes: `${orderNumber} · ${money(stockPerPiece)} ${linkedStock.unit} per piece` });
       }
-      const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: paymentStatus, notes: `${orderNumber} · ${input.garmentType} · quoted ${money(input.orderPrice)} BHD incl. VAT · ${paymentStatus === "paid" ? "full payment" : "deposit"} collected from POS.${input.customerSuppliedFabric ? " Customer supplied fabric." : " Shop fabric."}` }).returning({ id: invoices.id });
+      const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: paymentStatus, notes: `${orderNumber} · ${input.garmentType} · quoted ${money(input.orderPrice)} BHD incl. VAT · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "no payment"} collected from POS.${input.customerSuppliedFabric ? " Customer supplied fabric." : " Shop fabric."}` }).returning({ id: invoices.id });
       return { orderId, saleId, invoiceId: Number(invoiceResult[0]?.id || 0) };
     });
     await audit(ctx.user.id, "POS_TAILORING_CHECKOUT_COMPLETED", "tailoringOrder", transaction.orderId, { orderNumber, saleNumber, paymentAmount: input.paymentAmount, orderPrice: input.orderPrice, paymentStatus });

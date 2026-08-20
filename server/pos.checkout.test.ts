@@ -188,6 +188,37 @@ describe("pos.checkout", () => {
     expect(writes[4]).toMatchObject({ inventoryItemId: 81, movementType: "sale", referenceType: "tailoring_order", referenceId: 811, quantityChange: "-2.000", quantityAfter: "2.000" });
   });
 
+  it("creates an unpaid tailoring order when the collected amount is zero", async () => {
+    const writes: unknown[] = [];
+    const transactionResponses = [
+      [{ id: 1, status: "open" }],
+      [{ id: 44, name: "Test customer", phone: null }],
+      [{ id: 9, customerId: 44, version: 1 }],
+      [{ id: 7, name: "Test tailor", isActive: true }],
+    ];
+    const transactionDb = {
+      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { writes.push(value); const insertIds = [811, 712, 901, 902]; return { returning: () => [{ id: insertIds[writes.length - 1] }] }; }) })),
+      select: vi.fn(() => query(transactionResponses.shift() || [])),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
+    };
+    const rootResponses = [[{ userId: 1, role: "admin", isActive: true }], [{ invoicePrefix: "POS" }]];
+    const rootDb = {
+      select: vi.fn(() => query(rootResponses.shift() || [])),
+      insert: vi.fn(() => ({ values: vi.fn() })),
+      transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)),
+    };
+    mocked.getDb.mockResolvedValue(rootDb);
+    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+
+    const result = await caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 1, orderPrice: 45, paymentAmount: 0, paymentMethod: "cash", notes: "", productionNotes: "" });
+
+    expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902, total: 0, paymentStatus: "unpaid" });
+    expect(writes).toHaveLength(4);
+    expect(writes[1]).toMatchObject({ total: "0.000", paidAmount: "0.000", paymentStatus: "unpaid" });
+    expect(writes[2]).toMatchObject({ saleId: 712, lineTotal: "0.000", nameSnapshot: expect.stringContaining("unpaid") });
+    expect(writes[3]).toMatchObject({ saleId: 712, status: "unpaid" });
+  });
+
   it("returns the existing connected tailoring transaction on a retried client reference", async () => {
     const rootResponses = [
       [{ userId: 1, role: "admin", isActive: true }],
