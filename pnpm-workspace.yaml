@@ -14,3 +14,7 @@ patchedDependencies:
   "wouter@3.7.1": "patches/wouter@3.7.1.patch"
 
 minimumReleaseAge: 1440
+
+allowBuilds:
+  "@tailwindcss/oxide": true
+  esbuild: true

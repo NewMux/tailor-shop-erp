@@ -36,9 +36,9 @@ The Express application disables `X-Powered-By`, limits request bodies to 10 MB,
 
 ## Dependency and supply-chain policy
 
-The project is now pinned to **pnpm 11.22.0** with supported engine constraints of Node `>=20 <23` and pnpm `>=11.22.0 <12`. The deprecated `package.json.pnpm` configuration was removed and the dependency policy was moved to the root `pnpm-workspace.yaml`, where the security overrides, patched dependency, and 24-hour minimum release-age policy are recognized by the active toolchain.
+The project is now pinned to **pnpm 11.22.0** with supported engine constraints of Node `>=22 <23` and pnpm `>=11.22.0 <12`, matching pnpm 11’s documented Node 22 minimum. The deprecated `package.json.pnpm` configuration was removed and the dependency policy was moved to the root `pnpm-workspace.yaml`, where the security overrides, patched dependency, and 24-hour minimum release-age policy are recognized by the active toolchain.
 
-The lockfile was regenerated under pnpm 11. Frozen installation succeeds. The production dependency audit reports **zero vulnerabilities across 352 production dependencies**. The enforced resolutions include the reviewed versions of `fast-xml-parser`, `path-to-regexp`, `qs`, `body-parser`, `lodash`, and the Smithy resolver policy.
+The lockfile was regenerated under pnpm 11. Frozen installation succeeds, and the workspace explicitly allows only the reviewed native build scripts for `@tailwindcss/oxide` and `esbuild`; all other dependency build scripts remain blocked by default. The production dependency audit reports **zero vulnerabilities across 352 production dependencies**. The enforced resolutions include the reviewed versions of `fast-xml-parser`, `path-to-regexp`, `qs`, `body-parser`, `lodash`, and the Smithy resolver policy.
 
 A small number of non-blocking maintenance items remain: three deprecated subdependencies (`@esbuild-kit/core-utils`, `@esbuild-kit/esm-loader`, and `tar`), the inactive Recharts 2.x line, and an existing peer mismatch between `@builder.io/vite-plugin-jsx-loc` and Vite 7. These were not upgraded blindly because doing so could introduce unrelated UI or build changes; they should be handled in a separate dependency-maintenance cycle.
 
