@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { authApi } from "@/lib/auth";
 import { trpc } from "@/lib/trpc";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
@@ -26,9 +26,6 @@ if ("serviceWorker" in navigator) {
 
 const queryClient = new QueryClient();
 
-// Unauthorized errors are handled in-place by each screen (DashboardLayout
-// shows the sign-in form when `auth.me` comes back empty), so we just log
-// here instead of forcing a redirect.
 queryClient.getQueryCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     console.error("[API Query Error]", event.query.state.error);
@@ -44,11 +41,10 @@ queryClient.getMutationCache().subscribe(event => {
 const trpcClient = trpc.createClient({
   links: [
     httpBatchLink({
-      url: "/api/trpc",
+      url: `${(import.meta.env.VITE_API_URL || "").replace(/\/$/, "")}/api/trpc`,
       transformer: superjson,
       async headers() {
-        const { data } = await supabase.auth.getSession();
-        const token = data.session?.access_token;
+        const token = authApi.getToken();
         return token ? { Authorization: `Bearer ${token}` } : {};
       },
     }),

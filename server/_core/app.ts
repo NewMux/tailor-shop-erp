@@ -4,12 +4,36 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { registerStorageProxy } from "./storageProxy";
+import { registerAuthRoutes } from "./localAuth";
+import { ENV } from "./env";
+
+function registerCors(app: Express) {
+  const allowedOrigins = ENV.allowedOrigin
+    .split(",")
+    .map(origin => origin.trim())
+    .filter(Boolean);
+
+  app.use((req, res, next) => {
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin : "";
+    const isAllowed = origin && (allowedOrigins.length > 0 ? allowedOrigins.includes(origin) : !ENV.isProduction);
+    if (isAllowed) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Vary", "Origin");
+    }
+    if (req.method === "OPTIONS") {
+      res.sendStatus(isAllowed ? 204 : 403);
+      return;
+    }
+    next();
+  });
+}
 
 /**
- * Builds the Express app shared by both hosting shapes:
- * - a persistent Node process (server/_core/index.ts — local dev, or any
- *   host that runs `pnpm start`)
- * - a Vercel serverless function (api/index.ts)
+ * Builds the Express app shared by the local development server and the
+ * standalone Hetzner production process.
  */
 export function createApp(): Express {
   const app = express();
@@ -25,15 +49,17 @@ export function createApp(): Express {
     }
     next();
   });
+  registerCors(app);
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ limit: "10mb", extended: true }));
+  registerAuthRoutes(app);
   registerStorageProxy(app);
   app.use(
     "/api/trpc",
     createExpressMiddleware({
       router: appRouter,
       createContext,
-    })
+    }),
   );
   return app;
 }

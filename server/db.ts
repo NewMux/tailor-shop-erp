@@ -1,10 +1,11 @@
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq } from "drizzle-orm";
-import { pendingAccessRequests, users, type InsertUser } from "../drizzle/schema";
+import { pendingAccessRequests, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let database: ReturnType<typeof drizzle> | null = null;
+
 export async function getDb() {
   if (!database && ENV.databaseUrl) {
     const client = postgres(ENV.databaseUrl, { prepare: false });
@@ -13,27 +14,48 @@ export async function getDb() {
   return database;
 }
 
-/**
- * Insert-or-touch a user row from verified Supabase JWT claims. `openId`
- * holds the Supabase user UUID (the `sub` claim); the admin/pending-approval
- * gate is decided from `email` matching OWNER_EMAIL.
- */
-export async function upsertUser(user: InsertUser) {
-  const db = await getDb();
-  if (!db || !user.openId) return;
-  const isOwner = (user.email ?? "").toLowerCase() === ENV.ownerEmail && ENV.ownerEmail.length > 0;
-  const values: InsertUser = { ...user, lastSignedIn: user.lastSignedIn || new Date(), role: isOwner ? "admin" : user.role || "user" };
-  await db.insert(users).values(values).onConflictDoUpdate({ target: users.openId, set: { name: values.name, email: values.email, loginMethod: values.loginMethod, lastSignedIn: values.lastSignedIn, role: values.role } });
-  if (isOwner) return;
-  const signedInUser = (await db.select().from(users).where(eq(users.openId, values.openId)).limit(1))[0];
-  if (!signedInUser) return;
-  const existing = (await db.select().from(pendingAccessRequests).where(eq(pendingAccessRequests.userId, signedInUser.id)).limit(1))[0];
-  if (!existing) await db.insert(pendingAccessRequests).values({ userId: signedInUser.id, status: "pending" });
-  else if (existing.status === "rejected") await db.update(pendingAccessRequests).set({ status: "pending", requestedAt: new Date(), reviewedAt: null, reviewedBy: null, note: null }).where(eq(pendingAccessRequests.id, existing.id));
-}
-
-export async function getUserByOpenId(openId: string) {
+export async function getUserById(userId: number) {
   const db = await getDb();
   if (!db) return undefined;
-  return (await db.select().from(users).where(eq(users.openId, openId)).limit(1))[0];
+  return (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
+}
+
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  return (await db.select().from(users).where(sql`lower(${users.email}) = ${email}`).limit(1))[0];
+}
+
+/**
+ * Non-admin staff are intentionally allowed to sign in before approval. The
+ * existing ERP access gate then keeps them out of business procedures until an
+ * owner assigns a role, matching the original onboarding behavior.
+ */
+export async function ensurePendingAccess(userId: number, role: "user" | "admin") {
+  if (role === "admin") return;
+  const db = await getDb();
+  if (!db) return;
+
+  const existing = (
+    await db
+      .select()
+      .from(pendingAccessRequests)
+      .where(eq(pendingAccessRequests.userId, userId))
+      .limit(1)
+  )[0];
+
+  if (!existing) {
+    await db.insert(pendingAccessRequests).values({ userId, status: "pending" });
+  } else if (existing.status === "rejected") {
+    await db
+      .update(pendingAccessRequests)
+      .set({
+        status: "pending",
+        requestedAt: new Date(),
+        reviewedAt: null,
+        reviewedBy: null,
+        note: null,
+      })
+      .where(and(eq(pendingAccessRequests.id, existing.id), eq(pendingAccessRequests.userId, userId)));
+  }
 }

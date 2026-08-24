@@ -1,38 +1,14 @@
-const DEFAULT_SUPABASE_URL = "https://cevoyflcdsdkhigyunlv.supabase.co";
-
 function cleanEnvironmentValue(value: string | undefined): string {
   return value?.trim().replace(/^['\"]|['\"]$/g, "") ?? "";
 }
 
-function validSupabaseUrl(...candidates: Array<string | undefined>): string {
-  for (const candidate of candidates) {
-    const value = cleanEnvironmentValue(candidate);
-    if (!value) continue;
-    try {
-      const parsed = new URL(value);
-      if (parsed.protocol === "https:" && parsed.hostname.endsWith(".supabase.co")) {
-        return parsed.toString().replace(/\/$/, "");
-      }
-    } catch {
-      // Continue to the next candidate. A Vercel variable may contain shell quotes.
-    }
-  }
-  return DEFAULT_SUPABASE_URL;
-}
-
 export const ENV = {
   databaseUrl: cleanEnvironmentValue(process.env.DATABASE_URL),
-  // Prefer server-only Supabase settings for token verification. The VITE_
-  // variables remain a backwards-compatible fallback for an existing deploy,
-  // but should not be the server's source of truth.
-  supabaseUrl: validSupabaseUrl(process.env.SUPABASE_URL, process.env.VITE_SUPABASE_URL),
-  supabaseAnonKey: cleanEnvironmentValue(
-    process.env.SUPABASE_ANON_KEY ?? process.env.VITE_SUPABASE_ANON_KEY
-  ),
-  // Email address (case-insensitive) that is automatically granted the admin
-  // role the first time it signs in. Set this to the shop owner's login email.
-  ownerEmail: (process.env.OWNER_EMAIL ?? "").toLowerCase(),
+  ownerEmail: (process.env.OWNER_EMAIL ?? "").trim().toLowerCase(),
+  authBaseUrl: cleanEnvironmentValue(process.env.AUTH_BASE_URL),
+  allowedOrigin: cleanEnvironmentValue(process.env.ALLOWED_ORIGIN),
   isProduction: process.env.NODE_ENV === "production",
-  forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
-  forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
+  secureCookies: process.env.NODE_ENV === "production",
+  forgeApiUrl: cleanEnvironmentValue(process.env.BUILT_IN_FORGE_API_URL),
+  forgeApiKey: cleanEnvironmentValue(process.env.BUILT_IN_FORGE_API_KEY),
 };

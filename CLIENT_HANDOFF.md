@@ -31,7 +31,9 @@ The point of sale is intentionally aligned to the active inventory records. It p
 
 ## Hosting requirements
 
-The app is a React/Vite frontend with an Express/tRPC backend (Drizzle ORM) plus a **Supabase** project (Postgres database + authentication). It's deployed on **Vercel**: the frontend builds to static assets, and the backend runs as a single Vercel serverless function (`api/index.ts`, which wraps the same Express app used for local development — see `vercel.json` for the routing). Local/alternate-host development still uses:
+The app is a React/Vite frontend with an Express/tRPC backend and Drizzle ORM. The **frontend remains on Vercel as static assets**, while Coolify manages the PostgreSQL database and API containers on the existing Hetzner server. Email/password authentication is self-hosted. The backend is a normal long-running Node process, so it is no longer coupled to a serverless runtime.
+
+For local development or a plain server, use:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -39,27 +41,32 @@ pnpm build
 pnpm start
 ```
 
-Authentication is handled by **Supabase Auth** (email/password) — the browser talks to Supabase directly via `@supabase/supabase-js`, and the server verifies the resulting access token by calling Supabase's own `/auth/v1/user` endpoint (no separate JWT secret to manage).
+The Vercel project only builds the frontend with `pnpm run build:frontend`. Set `VITE_API_URL` in Vercel to the public HTTPS origin assigned to the Coolify `app` service, such as `https://api.example.com`. The Coolify API service must set `ALLOWED_ORIGIN` to the exact Vercel origin. It must not commit `.env` files, credentials, reset-link files, or database dumps to source control.
 
-To deploy: connect this repository in the Vercel dashboard (Vercel auto-detects `vercel.json`), set the env vars below on the project, and deploy. No CLI or account token needed beyond the GitHub connection. It must not commit `.env` files, credentials, or database dumps to source control.
+| Variable | Where | Purpose |
+|---|---|---|
+| `DATABASE_URL` | Coolify | PostgreSQL connection string using the Compose service hostname `postgres`. |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Coolify | PostgreSQL service initialization values. Keep them private. |
+| `OWNER_EMAIL` | Coolify | Email automatically granted the admin role on registration. |
+| `AUTH_BASE_URL` | Coolify | Public Vercel URL used to build password-reset links. |
+| `ALLOWED_ORIGIN` | Coolify | Exact Vercel origin(s) allowed to call the API; comma-separated values are supported for a preview URL and production URL. |
+| `VITE_API_URL` | Vercel | Public HTTPS origin of the Coolify API service, baked into the frontend at build time. |
+| `NODE_ENV` | Coolify | Set to `production` for the backend container. |
+| `PORT` | Coolify | Internal backend port; the Compose app service uses `3000`. |
+| `BUILT_IN_FORGE_API_URL` / `BUILT_IN_FORGE_API_KEY` | Coolify, optional | File-storage proxy credentials if staff-document uploads are enabled. |
 
-| Required env var | Purpose |
-|---|---|
-| `DATABASE_URL` | Supabase Postgres connection string (Project Settings → Database → Connection string). Prefer the pooled "Transaction" connection string for serverless hosts. |
-| `OWNER_EMAIL` | The email address that automatically becomes the admin the first time it registers/signs in. Set this to the shop owner's real email before go-live. |
-| `NODE_ENV` | Set to `production` **only on hosts that don't set it for you** (e.g. a plain VPS running `pnpm start`). On Vercel, don't set it — Vercel sets it automatically during builds, and setting it yourself makes `pnpm install` skip devDependencies, which breaks the API function's build. |
-| `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | Project Settings → API. **Baked into the client bundle at build time** (must be set before the build runs) and also read server-side to verify tokens. |
+### First-time setup with Coolify on Hetzner
 
-Optional, only if the client enables the corresponding feature: `BUILT_IN_FORGE_API_URL` / `BUILT_IN_FORGE_API_KEY` for the file storage proxy. Never expose server credentials to the browser.
+1. In Coolify, create a Docker Compose resource from this repository, using `/` as the base directory and `docker-compose.yml` as the Compose file. Use the review branch during testing, then switch to `main` after merge.
+2. Add the PostgreSQL, database URL, owner, authentication, CORS, and optional storage variables in Coolify. Keep the `postgres_data` volume persistent.
+3. Assign `https://api.example.com` to the Compose `app` service on port `3000`. Point DNS to Hetzner; Coolify supplies HTTPS through its proxy. Do not expose PostgreSQL publicly or add a custom Compose network.
+4. Deploy the stack. Coolify runs the checked-in Drizzle migrations before starting the API, and the health check uses `/api/auth/session`.
+5. Import the data-only PostgreSQL backup through Coolify’s database import feature or its terminal, then verify the business records before user recovery.
+6. Set `VITE_API_URL` in Vercel to the Coolify API origin and deploy the static frontend. Set `AUTH_BASE_URL` and `ALLOWED_ORIGIN` in Coolify to the final Vercel URL.
+7. Register the shop owner with the exact `OWNER_EMAIL`. The owner becomes an administrator automatically; other accounts remain pending until approved in Shop Settings → Staff & Access.
+8. For users carried over from the old hosted authentication system, run `pnpm auth:reset-links` in the Coolify application terminal after the database restore. Deliver each generated link privately; each link expires after one hour and can be used once.
 
-Note: Vercel serverless functions have a request body size ceiling (a few MB depending on plan) — fine for this app's JSON/API traffic, but worth knowing if a future feature needs large file uploads through `/api`.
-
-### First-time setup on a fresh Supabase project
-
-1. Create the Supabase project. Grab the Postgres connection string (`DATABASE_URL`) and the project URL and anon key (`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`) from Project Settings.
-2. In Supabase Auth settings, confirm the Email provider is enabled. Decide whether to require email confirmation before sign-in (Authentication → Providers → Email) — the app's sign-up form handles both cases.
-3. Run `pnpm exec drizzle-kit migrate` (with `DATABASE_URL` set) to create all tables in the Supabase database. Vercel has no build-time migration hook, so run this manually whenever `drizzle/schema.ts` changes, before or after deploying.
-4. Set `OWNER_EMAIL` to the shop owner's email, then have them register through the app's sign-up form with that exact email — they'll land as admin automatically. Everyone else who registers lands in a pending-approval queue until the admin approves them (Shop Settings → Staff & Access).
+See [HETZNER_DEPLOYMENT.md](./HETZNER_DEPLOYMENT.md) for the complete Coolify deployment, backup, restore, and cutover procedure.
 
 ## Go-live acceptance test
 

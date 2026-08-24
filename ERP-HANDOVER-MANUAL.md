@@ -46,11 +46,9 @@ Open the production URL and sign in with the staff email and password assigned b
 
 ### Forgot-password procedure
 
-The sign-in screen now includes **Forgot password?**. Enter the staff email and choose **Send reset link**. The system displays a neutral confirmation so that the screen does not reveal whether an email is registered. Open the email and follow the reset link. The application must show **Set a new password**, not the ERP workspace. Enter and confirm a new password of at least eight characters, choose **Update password**, and then continue into the ERP.
+The sign-in screen includes **Forgot password?**. Enter the staff email and choose **Send reset link**. The response is intentionally neutral so the screen does not reveal whether an email is registered. Because this zero-cost deployment does not require an external email provider, the server administrator must obtain the one-time link from the server log or run `pnpm auth:reset-links` and deliver the matching link privately to the user. The application must show **Set a new password**, not the ERP workspace. Enter and confirm a new password of at least eight characters, choose **Update password**, and then continue into the ERP.
 
-This flow follows Supabase’s documented password-reset pattern: the application requests a reset email with `resetPasswordForEmail`, then updates the authenticated recovery session with `updateUser` after the user supplies a new password.[1] [2]
-
-If a link has expired or is invalid, the application clears the local session and displays a recovery message. Return to the sign-in screen and request a new link. If the reset email does not arrive, verify the address, spam folder, and the configured Supabase redirect URL before escalating to the owner or technical administrator.
+Reset links expire after one hour and are invalidated after one use. If a link has expired or is invalid, request a new link from the server administrator. Existing users carried over from the former authentication service must use this reset process once because their old password hashes are not imported into the local authentication tables.
 
 ### Owner access and custom roles
 
@@ -172,8 +170,8 @@ The service worker is configured to prefer fresh JavaScript and CSS assets and t
 
 | Symptom | First response | Escalation |
 |---|---|---|
-| Password reset link enters the ERP without a reset screen | Sign out, request a new link from Forgot password, and confirm the current deployment is loaded | Owner or technical administrator checks the recovery deployment and Supabase redirect configuration |
-| Reset link is expired | Request a new link; do not reuse the old URL | Verify email delivery and Supabase settings |
+| Password reset link enters the ERP without a reset screen | Sign out, request a new link from Forgot password, and confirm the current deployment is loaded | Owner or technical administrator checks the Vercel URL, `VITE_API_URL`, and Hetzner API logs |
+| Reset link is expired | Request a new link; do not reuse the old URL | Run `pnpm auth:reset-links` on Hetzner and deliver the new matching link privately |
 | Customer name does not appear in POS | Re-select the customer with F9 or the customer picker, then reload the catalog | Check browser cache and current deployment |
 | Cart count remains zero after adding an item | Confirm the item is active and visible, then refresh once | Check catalog query and service worker freshness |
 | Tailoring order cannot confirm | Verify customer, customer-owned measurement profile, active tailor, quote, and payment amount | Owner checks the related records and permissions |
@@ -213,7 +211,7 @@ The handover audit produced the following repository evidence after the password
 |---|---:|
 | TypeScript check: `pnpm check` | Passed |
 | Full Vitest suite: `pnpm test` | **50/50 passed across 12 files** |
-| Production build: `pnpm build:vercel` | Passed |
+| Production build: `pnpm build` and `pnpm run build:frontend` | Passed |
 | Formatting/whitespace: `git diff --check` | Passed before generated build output |
 | Production shell smoke test | Passed; staff sign-in boundary loaded |
 | Protected live workflow test | Authorized session reached core workspaces; connected tailoring transaction verified read-only in production; remaining operator checks pending |
@@ -222,19 +220,15 @@ The handover audit produced the following repository evidence after the password
 | Existing connected-sale release | `d68898a` on `main` |
 | Handover and password-recovery release | `57cad96` on `main`; Vercel production deployment is **READY** |
 
-The production build emits `api/index.js` as a generated artifact. It must be excluded from source commits unless the project’s deployment process explicitly requires the generated bundle. The source commit should contain the recovery-flow repair, the handover manual, and the updated evidence files only.
+The production backend is built into `dist/index.js` and runs on Hetzner. Vercel publishes only `dist/public` through `pnpm run build:frontend`; no generated API bundle is committed. See `HETZNER_DEPLOYMENT.md` for the cutover, backup, reset-link, and rollback procedure.
 
 ## 15. Owner actions before final operational sign-off
 
 The owner should first save the Shop Settings record with the real business identity, invoice prefix, VAT settings, and invoice terms. The owner should then remove or deactivate all `[TEST]` records, create the real material and service catalog, and complete the live acceptance checklist with a demo customer and test records.
 
-The owner should also send one password-reset email to a controlled test account and confirm that the recipient sees the new password screen. The authorized live session verified sign-in, core workspace navigation, customer selection, catalog visibility, customer/cart synchronization, and one complete connected tailoring transaction through read-only production records. The owner must still test each staff role using a separate account, complete the return, payroll, staff-document, invoice-print, settings, and production-stage checks, and retain the audit trail for the first real sales day.
+The owner should also generate one reset link for a controlled test account and confirm that the recipient sees the new-password screen. The authorized live session verified sign-in, core workspace navigation, customer selection, catalog visibility, customer/cart synchronization, and one complete connected tailoring transaction through read-only production records. The owner must still test each staff role using a separate account, complete the return, payroll, staff-document, invoice-print, settings, and production-stage checks, and retain the audit trail for the first real sales day.
 
 ## References
-
-[1]: https://supabase.com/docs/reference/javascript/auth-resetpasswordforemail "Supabase JavaScript reference: resetPasswordForEmail"
-
-[2]: https://supabase.com/docs/guides/auth/passwords "Supabase documentation: Password-based Auth"
 
 [3]: https://github.com/m4ahmed7/tailor-shop-erp "Al Hussam Tailor ERP GitHub repository"
 

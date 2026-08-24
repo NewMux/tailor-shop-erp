@@ -25,11 +25,11 @@ This matrix defines the checks required for operational handover of the Al Hussa
 | STAFF-01 | Staff access and documents | Authorized administrators can invite, approve, remove, and manage staff access and documents without bypassing custom permissions. | `server/erp.validation.test.ts`, role tests, WorkforceHub UI | **Passed automated/source audit**; live execution pending |
 | INV-03 | Invoice/receipt | Invoice printing is self-contained, uses shop branding/terms, and invoice filters work by invoice, sale, payment, status, and date. | `server/invoice.print.test.ts`, `server/invoice.filters.test.ts`, `server/sales.report.test.ts` | **Passed automated**; live print pending |
 | OPS-01 | Offline/cache behavior | Stale JavaScript/CSS bundles do not overwrite current React state, and the service worker refreshes after a new deployment. | `client/public/sw.js`, `client/src/main.tsx` | **Source verified** |
-| PROD-01 | Production schema | Production includes `inventoryItems.size` and nullable unique `tailoringOrders.saleId`; migrations are recorded and applied. | Supabase migration result; `drizzle/0004_customer_workflows.sql`, `drizzle/0005_tailoring_sale_link.sql` | **Passed production schema check** |
+| PROD-01 | Production schema | Production includes `inventoryItems.size`, nullable unique `tailoringOrders.saleId`, and the local-auth tables; migrations are recorded and applied by the Hetzner app container. | `drizzle/0004_customer_workflows.sql`, `drizzle/0005_tailoring_sale_link.sql`, `drizzle/0006_local_auth.sql` | **Migration readiness verified; live restore pending** |
 
 ## Automated baseline
 
-After the handover repair, `pnpm check` passed and the full Vitest suite passed with **50 tests across 12 files**. The production build also passed after the repair.
+After the local-auth migration changes, `pnpm check` passed. The full Vitest suite and both the standalone backend build and static Vercel build are release gates and must be rerun before deployment.
 
 ## Live-test limitation
 

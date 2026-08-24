@@ -1,0 +1,4 @@
+# Replace api.example.com with the domain or subdomain pointing to the Hetzner server.
+api.example.com {
+  reverse_proxy 127.0.0.1:3000
+}

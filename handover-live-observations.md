@@ -14,7 +14,7 @@
 - Repository: `m4ahmed7/tailor-shop-erp`
 - Production commit at test start: `d68898af34d9df210f54fb1cdddf5aab3fa54e53` (`Connect tailoring orders to POS sales`)
 - Production deployment: `https://tailor-shop-ov75fzxr9-m4ahmed7-4321s-projects.vercel.app`
-- Production Supabase project: `cevoyflcdsdkhigyunlv`
+- Current target architecture: static frontend on Vercel; PostgreSQL, API, and local authentication on Hetzner
 - Main application routes: `/`, `/customers`, `/inventory`, `/tailoring`, `/sales`, `/sales-history`, `/invoices`, `/team`, `/settings`, `/audit`
 - Automated test files: `auth.callback.test.ts`, `custom.roles.test.ts`, `dashboard.test.ts`, `erp.validation.test.ts`, `invoice.filters.test.ts`, `invoice.print.test.ts`, `operations.search.test.ts`, `pos.catalog.test.ts`, `pos.checkout.test.ts`, `pos.test.ts`, `sales.report.test.ts`, `tailoring.orders.test.ts`
 

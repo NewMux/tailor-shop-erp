@@ -1,83 +1,17 @@
 import { ForbiddenError } from "@shared/_core/errors";
 import type { Request } from "express";
 import type { User } from "../../drizzle/schema";
-import * as db from "../db";
-import { ENV } from "./env";
-
-type SupabaseAuthUser = {
-  id: string;
-  email?: string | null;
-  user_metadata?: {
-    name?: unknown;
-    full_name?: unknown;
-  } | null;
-};
-
-async function getSupabaseUser(accessToken: string): Promise<SupabaseAuthUser> {
-  if (!ENV.supabaseAnonKey) {
-    throw ForbiddenError("Server authentication is not configured");
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(`${ENV.supabaseUrl}/auth/v1/user`, {
-      headers: {
-        apikey: ENV.supabaseAnonKey,
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-  } catch {
-    throw ForbiddenError("Session verification unavailable");
-  }
-
-  if (!response.ok) {
-    throw ForbiddenError("Invalid session");
-  }
-
-  const data = (await response.json()) as SupabaseAuthUser;
-  if (!data?.id) {
-    throw ForbiddenError("Invalid session");
-  }
-  return data;
-}
+import { getUserForRequest } from "./localAuth";
 
 class SDKServer {
   /**
-   * Verifies the Supabase access token sent as `Authorization: Bearer <token>`
-   * against the Supabase Auth user endpoint, then syncs it to the app-level
-   * `users` row (role/pending-approval gating lives there, not in Supabase).
+   * Authenticates a request using the local opaque session created by the
+   * self-hosted auth endpoints. The frontend sends it as a Bearer token; the
+   * HttpOnly cookie is also supported for same-origin deployments.
    */
   async authenticateRequest(req: Request): Promise<User> {
-    const authHeader = req.headers.authorization;
-    const token =
-      typeof authHeader === "string" && authHeader.startsWith("Bearer ")
-        ? authHeader.slice(7)
-        : undefined;
-    if (!token) {
-      throw ForbiddenError("Missing session");
-    }
-
-    const authUser = await getSupabaseUser(token);
-    const metadata = authUser.user_metadata;
-    const name =
-      (typeof metadata?.name === "string" && metadata.name) ||
-      (typeof metadata?.full_name === "string" && metadata.full_name) ||
-      authUser.email ||
-      "";
-
-    await db.upsertUser({
-      openId: authUser.id,
-      name,
-      email: authUser.email ?? null,
-      loginMethod: "supabase",
-      lastSignedIn: new Date(),
-    });
-
-    const user = await db.getUserByOpenId(authUser.id);
-    if (!user) {
-      throw ForbiddenError("User not found");
-    }
-
+    const user = await getUserForRequest(req);
+    if (!user) throw ForbiddenError("Missing or invalid session");
     return user;
   }
 }

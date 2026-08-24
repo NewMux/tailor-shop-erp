@@ -17,7 +17,7 @@ The release preserves the intended business behavior while closing approval bypa
 |---|---|---|---|---|
 | SEC-01 | Critical | The POS access helper could create an active `sales` business-role row for an authenticated user who had not been approved, bypassing the pending-user gate. | `requireCounterAccess()` now fails closed when no active approved business role exists. Automatic role creation was removed. | Regression coverage denies POS access to a pending user; full test suite passes. |
 | SEC-02 | High | `erp.shop.get` was protected only by authentication and could expose shop settings to a signed-in but unapproved account. | The procedure now invokes the approved business-role gate before returning shop settings. | Authorization path reviewed and type/test validation passes. |
-| SEC-03 | High | The `/manus-storage/*` proxy could issue signed document redirects without a verified session or payroll-level authorization. | The proxy now requires a verified Supabase session, active admin/payroll access or owner-assigned payroll permission, and a storage key registered in `staffDocuments`. Responses are private and non-cacheable. The client uses the protected `erp.staff.documents.download` procedure rather than opening legacy storage URLs directly. | Proxy and client paths reviewed; protected download procedure is role-gated. |
+| SEC-03 | High | The `/manus-storage/*` proxy could issue signed document redirects without a verified session or payroll-level authorization. | The proxy now requires a verified local session, active admin/payroll access or owner-assigned payroll permission, and a storage key registered in `staffDocuments`. Responses are private and non-cacheable. The client uses the protected `erp.staff.documents.download` procedure rather than opening legacy storage URLs directly. | Proxy and client paths reviewed; protected download procedure is role-gated. |
 | SEC-04 | High | Connected tailoring checkout lacked replay protection, so a timeout or retry could create duplicate sales, payments, tailoring orders, and material deductions. | Standard, quick, and connected tailoring checkout now accept bounded `clientReference` values. A unique sales reference and linked tailoring-order constraints provide the database boundary; retries return the existing linked transaction. POS and offline replay paths forward stable references. | Regression test covers connected tailoring replay; test suite passes. |
 | SEC-05 | Medium | Discount usage was checked and incremented in separate operations, allowing concurrent checkouts to exceed a usage limit. | Usage increments now use an atomic conditional update with `usedCount < usageLimit` inside the checkout transaction. | Checkout logic reviewed and full test suite passes. |
 | SEC-06 | Medium | Authenticated accounts were synchronized before business-role approval, which was safe only if every business route consistently enforced the approval gate. | Route-level review closed the identified POS and shop-settings approval gaps. Protected ERP procedures continue to use the central approved-access boundary, while admin routes use the admin procedure. | Public-procedure and protected-route inventory completed; typecheck and tests pass. |
@@ -46,7 +46,7 @@ A small number of non-blocking maintenance items remain: three deprecated subdep
 
 The unused client debug telemetry collector and its Vite injection/log endpoint were removed. The production ERP router no longer exposes the admin-only demo, demo-recovery, or demo-workforce mutations, which could seed fake customers, inventory, sales, invoices, staff, attendance, performance, or payroll data. Obsolete tracked scaffold/backlog artifacts (`template.json`, `todo.md`, and `reference-notes.md`) were deleted.
 
-The tracked `api/index.js` Vercel bundle was rebuilt from the hardened source. Sandbox-only notes, helper scripts, local inventories, and temporary validation artifacts remain outside the repository release and are not intended for commit.
+The backend is built into `dist/index.js` for the Hetzner container, while Vercel publishes only the static frontend from `dist/public`. Sandbox-only notes, helper scripts, local inventories, and temporary validation artifacts remain outside the repository release and are not intended for commit.
 
 ## Validation evidence
 
@@ -56,7 +56,7 @@ The following checks are the release gate and must remain green at handoff:
 |---|---|
 | `pnpm check` | Pass |
 | Vitest suite (`52/52`) | Pass |
-| `pnpm build:vercel` | Pass |
+| `pnpm build` and `pnpm run build:frontend` | Pass |
 | `git diff --check` | Pass |
 | Frozen pnpm installation / lockfile policy check | Pass |
 | `pnpm audit --prod` | 0 vulnerabilities |

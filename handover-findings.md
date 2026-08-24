@@ -22,11 +22,11 @@ The POS supports keyboard-first operation through `/` or Ctrl/Cmd+K search, F2 p
 
 The source audit did not expose a definite defect in these paths. One live-browser check remains required: select a real customer, add two catalog items, alter quantity/amount with keyboard input, complete a partial or full payment, print the invoice, and confirm the customer name and cart count update immediately.
 
-## Password recovery finding and repair
+## Password recovery migration
 
-The live operator report was reproducible from code: Supabase recovery sessions were treated as ordinary authenticated sessions. `useAuth` enabled `auth.me` as soon as any Supabase session existed, and `DashboardLayout` rendered the ERP whenever that profile resolved. There was no recovery-specific password-update screen.
+The deployment now uses a local password-reset token stored as a SHA-256 digest in PostgreSQL. Recovery links open the dedicated **Set a new password** screen before the ERP workspace is rendered. Tokens expire after one hour, are invalidated after use, and are replaced when a newer link is generated.
 
-The repair adds explicit detection of `type=recovery` callbacks and Supabase `PASSWORD_RECOVERY` events. Recovery sessions now remain outside the ERP workspace until the user enters and confirms a new password. The password is updated through `supabase.auth.updateUser`, after which the normal ERP profile is loaded. Expired or denied callback links still sign out locally and show the existing security message. Automated evidence after the repair is: TypeScript check passed, 50/50 Vitest tests passed, and the production build passed.
+Users carried over from the former hosted authentication system receive no imported password hash. The operator must run `pnpm auth:reset-links`, deliver each matching link privately, and delete the generated file after delivery. Automated validation covers the new query-token callback helper; the full protected workflow still requires an authenticated operator session.
 
 ## Operational workflow audit
 
