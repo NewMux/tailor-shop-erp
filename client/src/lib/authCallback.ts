@@ -1,22 +1,5 @@
-export function isPasswordRecoveryCallback(hash: string): boolean {
-  const rawHash = hash.startsWith("#") ? hash.slice(1) : hash;
-  if (!rawHash) return false;
-  const params = new URLSearchParams(rawHash);
-  return params.get("type") === "recovery" && Boolean(params.get("access_token"));
-}
-
-export function getAuthCallbackErrorMessage(hash: string): string | null {
-  const rawHash = hash.startsWith("#") ? hash.slice(1) : hash;
-  if (!rawHash) return null;
-
-  const params = new URLSearchParams(rawHash);
-  const error = params.get("error");
-  const errorCode = params.get("error_code");
-  if (!error && !errorCode) return null;
-
-  if (errorCode === "otp_expired") {
-    return "This email link has expired. For security, your existing session was signed out. Request a new link, then sign in again.";
-  }
-
-  return "This sign-in link is invalid or has expired. For security, your existing session was signed out.";
+export function getPasswordResetToken(search: string): string | null {
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  const token = params.get("reset_token");
+  return token?.trim() || null;
 }

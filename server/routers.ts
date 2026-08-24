@@ -3,10 +3,9 @@ import { publicProcedure, router } from "./_core/trpc";
 import { erpRouter } from "./erp";
 import { posRouter } from "./pos";
 
-// Registration, login, and logout are handled entirely client-side by the
-// Supabase client SDK (supabase.auth.signUp/signInWithPassword/signOut).
-// The server only ever verifies the resulting access token (see
-// server/_core/sdk.ts) and reports the synced app-level user profile here.
+// Registration, login, logout, and password recovery are exposed by the
+// standalone local auth routes. This tRPC procedure reports the synced
+// app-level user profile to the authenticated ERP client.
 const authRouter = router({
   me: publicProcedure.query(opts => opts.ctx.user),
 });

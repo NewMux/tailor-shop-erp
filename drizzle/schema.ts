@@ -2,7 +2,7 @@ import { boolean, date, decimal, integer, jsonb, pgEnum, pgTable, serial, text, 
 
 export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
 export const users = pgTable("users", {
-  id: serial("id").primaryKey(), openId: varchar("openId", { length: 320 }).notNull().unique(), name: text("name"), email: varchar("email", { length: 320 }), loginMethod: varchar("loginMethod", { length: 64 }), role: userRoleEnum("role").default("user").notNull(), createdAt: timestamp("createdAt").defaultNow().notNull(), updatedAt: timestamp("updatedAt").defaultNow().notNull(), lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+  id: serial("id").primaryKey(), openId: varchar("openId", { length: 320 }).notNull().unique(), name: text("name"), email: varchar("email", { length: 320 }), passwordHash: text("passwordHash"), loginMethod: varchar("loginMethod", { length: 64 }), role: userRoleEnum("role").default("user").notNull(), createdAt: timestamp("createdAt").defaultNow().notNull(), updatedAt: timestamp("updatedAt").defaultNow().notNull(), lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
@@ -54,3 +54,22 @@ export const attendance = pgTable("attendance", { id: serial("id").primaryKey(),
 export const performanceRecords = pgTable("performanceRecords", { id: serial("id").primaryKey(), staffProfileId: integer("staffProfileId").notNull(), workDate: date("workDate", { mode: "date" }).notNull(), metric: varchar("metric", { length: 120 }).notNull(), units: decimal("units", { precision: 12, scale: 3 }).notNull(), commissionEarned: decimal("commissionEarned", { precision: 12, scale: 3 }).notNull().default("0"), notes: text("notes"), recordedBy: integer("recordedBy").notNull(), createdAt: timestamp("createdAt").defaultNow().notNull() });
 export const salaryPayouts = pgTable("salaryPayouts", { id: serial("id").primaryKey(), staffProfileId: integer("staffProfileId").notNull(), payPeriod: varchar("payPeriod", { length: 20 }).notNull(), payslipNumber: varchar("payslipNumber", { length: 60 }).unique(), baseSalary: decimal("baseSalary", { precision: 12, scale: 3 }).notNull(), allowances: decimal("allowances", { precision: 12, scale: 3 }).notNull().default("0"), overtime: decimal("overtime", { precision: 12, scale: 3 }).notNull().default("0"), performanceBonus: decimal("performanceBonus", { precision: 12, scale: 3 }).notNull().default("0"), deductions: decimal("deductions", { precision: 12, scale: 3 }).notNull().default("0"), deductionDetails: text("deductionDetails"), netSalary: decimal("netSalary", { precision: 12, scale: 3 }).notNull(), notes: text("notes"), approvedBy: integer("approvedBy").notNull(), paidAt: timestamp("paidAt").defaultNow().notNull() });
 export const auditLogs = pgTable("auditLogs", { id: serial("id").primaryKey(), actorId: integer("actorId").notNull(), action: varchar("action", { length: 100 }).notNull(), entityType: varchar("entityType", { length: 80 }).notNull(), entityId: integer("entityId"), detailsJson: text("detailsJson"), createdAt: timestamp("createdAt").defaultNow().notNull() });
+
+
+export const authSessions = pgTable("authSessions", {
+  id: serial("id").primaryKey(),
+  tokenHash: varchar("tokenHash", { length: 128 }).notNull().unique(),
+  userId: integer("userId").notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  lastUsedAt: timestamp("lastUsedAt").defaultNow().notNull(),
+});
+
+export const passwordResetTokens = pgTable("passwordResetTokens", {
+  id: serial("id").primaryKey(),
+  tokenHash: varchar("tokenHash", { length: 128 }).notNull().unique(),
+  userId: integer("userId").notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  usedAt: timestamp("usedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});

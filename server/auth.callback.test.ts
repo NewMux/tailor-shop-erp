@@ -1,23 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { getAuthCallbackErrorMessage, isPasswordRecoveryCallback } from "../client/src/lib/authCallback";
+import { getPasswordResetToken } from "../client/src/lib/authCallback";
 
-describe("auth callback errors", () => {
-  it("recognizes an expired OTP link", () => {
-    expect(getAuthCallbackErrorMessage("#error=access_denied&error_code=otp_expired")).toContain("email link has expired");
+describe("local auth callback helpers", () => {
+  it("extracts a password reset token from the query string", () => {
+    expect(getPasswordResetToken("?reset_token=reset_abc")).toBe("reset_abc");
   });
 
-  it("recognizes a denied or invalid link", () => {
-    expect(getAuthCallbackErrorMessage("#error=access_denied")).toContain("invalid or has expired");
-  });
-
-  it("does not treat a normal auth hash as an error", () => {
-    expect(getAuthCallbackErrorMessage("#access_token=token&type=recovery")).toBeNull();
-    expect(getAuthCallbackErrorMessage("")).toBeNull();
-  });
-
-  it("identifies a Supabase recovery callback separately from ordinary sign-in", () => {
-    expect(isPasswordRecoveryCallback("#access_token=token&type=recovery")).toBe(true);
-    expect(isPasswordRecoveryCallback("#access_token=token&type=signup")).toBe(false);
-    expect(isPasswordRecoveryCallback("#type=recovery")).toBe(false);
+  it("does not treat an ordinary URL as a reset flow", () => {
+    expect(getPasswordResetToken("")).toBeNull();
+    expect(getPasswordResetToken("?foo=bar")).toBeNull();
   });
 });

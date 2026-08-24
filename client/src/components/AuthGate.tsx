@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { authApi } from "@/lib/auth";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Loader2, Scissors } from "lucide-react";
 import { useState } from "react";
@@ -9,10 +9,11 @@ import { Label } from "@/components/ui/label";
 type AuthGateProps = {
   callbackError?: string | null;
   recoveryMode?: boolean;
+  resetToken?: string | null;
   onRecoveryComplete?: () => Promise<void> | void;
 };
 
-export default function AuthGate({ callbackError, recoveryMode = false, onRecoveryComplete }: AuthGateProps) {
+export default function AuthGate({ callbackError, recoveryMode = false, resetToken, onRecoveryComplete }: AuthGateProps) {
   const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -32,38 +33,25 @@ export default function AuthGate({ callbackError, recoveryMode = false, onRecove
 
     try {
       if (recoveryMode) {
+        if (!resetToken) throw new Error("This password reset link is invalid or expired.");
         if (recoveryPassword !== recoveryConfirmation) {
           setError("The passwords do not match.");
           return;
         }
-        const { error: updateError } = await supabase.auth.updateUser({ password: recoveryPassword });
-        if (updateError) throw updateError;
+        await authApi.reset(resetToken, recoveryPassword);
         setNotice("Password updated. Opening your ERP workspace…");
         await onRecoveryComplete?.();
         return;
       }
 
       if (mode === "forgot") {
-        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: window.location.origin,
-        });
-        if (resetError) throw resetError;
-        setNotice("If an account exists for this email, a password-reset link has been sent.");
+        const response = await authApi.forgot(email);
+        setNotice(response.resetUrl ? `Reset link created for local testing: ${response.resetUrl}` : response.message);
         setMode("login");
       } else if (mode === "login") {
-        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) throw signInError;
+        await authApi.login(email, password);
       } else {
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { data: { name } },
-        });
-        if (signUpError) throw signUpError;
-        if (!data.session) {
-          setNotice("Check your email to confirm your account, then sign in below.");
-          setMode("login");
-        }
+        await authApi.register(name, email, password);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -86,7 +74,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, onRecove
             : mode === "login"
               ? "Use the email and password set up for your staff account."
               : mode === "forgot"
-                ? "Enter your staff email and we will send a secure reset link."
+                ? "Enter your staff email and request a secure reset link."
                 : "The first account registered with the shop owner's email becomes the administrator."}
         </p>
 
@@ -165,7 +153,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, onRecove
           )}
 
           {!recoveryMode && callbackError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm leading-5 text-amber-950">{callbackError}</div>}
-          {notice && <p className="text-sm text-emerald-600">{notice}</p>}
+          {notice && <p className="break-words text-sm text-emerald-600">{notice}</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
 
           <Button type="submit" className="w-full" disabled={pending}>
