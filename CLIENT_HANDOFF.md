@@ -31,7 +31,7 @@ The point of sale is intentionally aligned to the active inventory records. It p
 
 ## Hosting requirements
 
-The app is a React/Vite frontend with an Express/tRPC backend and Drizzle ORM. The **frontend remains on Vercel as static assets**, while PostgreSQL, the API, and email/password authentication run on the existing Hetzner server. The backend is a normal long-running Node process, so it is no longer coupled to a serverless runtime.
+The app is a React/Vite frontend with an Express/tRPC backend and Drizzle ORM. The **frontend remains on Vercel as static assets**, while Coolify manages the PostgreSQL database and API containers on the existing Hetzner server. Email/password authentication is self-hosted. The backend is a normal long-running Node process, so it is no longer coupled to a serverless runtime.
 
 For local development or a plain server, use:
 
@@ -41,27 +41,32 @@ pnpm build
 pnpm start
 ```
 
-The Vercel project only builds the frontend with `pnpm run build:frontend`. Set `VITE_API_URL` in Vercel to the public HTTPS origin of the Hetzner API, such as `https://api.example.com`. The Hetzner API must set `ALLOWED_ORIGIN` to the exact Vercel origin. It must not commit `.env` files, credentials, reset-link files, or database dumps to source control.
+The Vercel project only builds the frontend with `pnpm run build:frontend`. Set `VITE_API_URL` in Vercel to the public HTTPS origin assigned to the Coolify `app` service, such as `https://api.example.com`. The Coolify API service must set `ALLOWED_ORIGIN` to the exact Vercel origin. It must not commit `.env` files, credentials, reset-link files, or database dumps to source control.
 
 | Variable | Where | Purpose |
 |---|---|---|
-| `DATABASE_URL` | Hetzner | PostgreSQL connection string for the self-hosted database. |
-| `OWNER_EMAIL` | Hetzner | Email automatically granted the admin role on registration. |
-| `AUTH_BASE_URL` | Hetzner | Public Vercel URL used to build password-reset links. |
-| `ALLOWED_ORIGIN` | Hetzner | Exact Vercel origin(s) allowed to call the API; comma-separated values are supported for a preview URL and production URL. |
-| `VITE_API_URL` | Vercel | Public HTTPS origin of the Hetzner API, baked into the frontend at build time. |
-| `NODE_ENV` | Hetzner | Set to `production` for the standalone backend. |
-| `PORT` | Hetzner | Internal backend port; the supplied Docker Compose file uses `3000`. |
-| `BUILT_IN_FORGE_API_URL` / `BUILT_IN_FORGE_API_KEY` | Hetzner, optional | File-storage proxy credentials if staff-document uploads are enabled. |
+| `DATABASE_URL` | Coolify | PostgreSQL connection string using the Compose service hostname `postgres`. |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Coolify | PostgreSQL service initialization values. Keep them private. |
+| `OWNER_EMAIL` | Coolify | Email automatically granted the admin role on registration. |
+| `AUTH_BASE_URL` | Coolify | Public Vercel URL used to build password-reset links. |
+| `ALLOWED_ORIGIN` | Coolify | Exact Vercel origin(s) allowed to call the API; comma-separated values are supported for a preview URL and production URL. |
+| `VITE_API_URL` | Vercel | Public HTTPS origin of the Coolify API service, baked into the frontend at build time. |
+| `NODE_ENV` | Coolify | Set to `production` for the backend container. |
+| `PORT` | Coolify | Internal backend port; the Compose app service uses `3000`. |
+| `BUILT_IN_FORGE_API_URL` / `BUILT_IN_FORGE_API_KEY` | Coolify, optional | File-storage proxy credentials if staff-document uploads are enabled. |
 
-### First-time setup on Hetzner
+### First-time setup with Coolify on Hetzner
 
-1. Copy the repository to the server, create a private `.env` from `.env.example`, and set the required values. Use a strong unique database password and keep the file readable only by the deployment user.
-2. Start the stack with `docker compose up -d --build`. The app container runs the checked-in Drizzle migrations before starting the API.
-3. Point a DNS record such as `api.example.com` to Hetzner and place the API behind HTTPS. `Caddyfile.example` provides the reverse-proxy shape.
-4. In Vercel, set `VITE_API_URL` to the API origin and deploy the static frontend. Set `AUTH_BASE_URL` and `ALLOWED_ORIGIN` on Hetzner to the final Vercel URL.
-5. Register the shop owner with the exact `OWNER_EMAIL`. The owner becomes an administrator automatically; other accounts remain pending until approved in Shop Settings → Staff & Access.
-6. For users carried over from the old hosted authentication system, run `pnpm auth:reset-links` on Hetzner after the database restore. Deliver each generated link privately; each link expires after one hour and can be used once.
+1. In Coolify, create a Docker Compose resource from this repository, using `/` as the base directory and `docker-compose.yml` as the Compose file. Use the review branch during testing, then switch to `main` after merge.
+2. Add the PostgreSQL, database URL, owner, authentication, CORS, and optional storage variables in Coolify. Keep the `postgres_data` volume persistent.
+3. Assign `https://api.example.com` to the Compose `app` service on port `3000`. Point DNS to Hetzner; Coolify supplies HTTPS through its proxy. Do not expose PostgreSQL publicly or add a custom Compose network.
+4. Deploy the stack. Coolify runs the checked-in Drizzle migrations before starting the API, and the health check uses `/api/auth/session`.
+5. Import the data-only PostgreSQL backup through Coolify’s database import feature or its terminal, then verify the business records before user recovery.
+6. Set `VITE_API_URL` in Vercel to the Coolify API origin and deploy the static frontend. Set `AUTH_BASE_URL` and `ALLOWED_ORIGIN` in Coolify to the final Vercel URL.
+7. Register the shop owner with the exact `OWNER_EMAIL`. The owner becomes an administrator automatically; other accounts remain pending until approved in Shop Settings → Staff & Access.
+8. For users carried over from the old hosted authentication system, run `pnpm auth:reset-links` in the Coolify application terminal after the database restore. Deliver each generated link privately; each link expires after one hour and can be used once.
+
+See [HETZNER_DEPLOYMENT.md](./HETZNER_DEPLOYMENT.md) for the complete Coolify deployment, backup, restore, and cutover procedure.
 
 ## Go-live acceptance test
 

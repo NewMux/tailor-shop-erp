@@ -1,8 +1,8 @@
-# Hetzner and Vercel deployment runbook
+# Coolify deployment runbook for Hetzner
 
 ## Target architecture
 
-The production system has two parts. Vercel serves the React/Vite static frontend, and the existing Hetzner server runs PostgreSQL plus the Express/tRPC API and local email/password authentication.
+Coolify manages one Docker Compose service stack on the existing Hetzner server. The stack contains the `postgres` database and the `app` Express/tRPC backend. Vercel continues to publish only the React/Vite frontend.
 
 ```text
 Staff browser
@@ -11,190 +11,220 @@ Staff browser
     │                                  │
     │                                  └── VITE_API_URL
     │
-    └── https://api.example.com  ──► HTTPS reverse proxy on Hetzner
+    └── https://api.example.com  ──► Coolify proxy / HTTPS
                                        │
-                                       └── Docker app :3000
+                                       └── app service :3000
                                              │
-                                             └── Docker PostgreSQL
+                                             └── postgres service
+                                                   │
+                                                   └── postgres_data volume
 ```
 
-The browser sends an opaque local session token in the `Authorization` header. The token is hashed before it is stored in PostgreSQL. The application never stores a plaintext password; passwords are stored as salted scrypt hashes. Existing business tables and numeric user IDs remain unchanged.
+The repository uses Coolify’s **Docker Compose build pack**. Coolify creates the service network and routes the configured domain through its proxy; the Compose file therefore does not define a custom network or a host port binding. Coolify’s documentation specifically warns against custom networks because they can make proxy routing intermittent.[1]
 
-## 1. Preserve the existing data before changing production
+The browser sends an opaque local session token in the `Authorization` header. The token is hashed before it is stored in PostgreSQL. Passwords are stored as salted scrypt hashes. Existing business tables and numeric user IDs remain unchanged.
 
-Do not delete or pause the existing database until the new deployment has passed the acceptance test. From a machine that has the PostgreSQL client utilities installed, create a custom-format backup of the application’s `public` schema:
+## 1. Preserve the existing data
+
+Do not delete or pause the former database until the Coolify deployment has passed the acceptance test. From a machine with PostgreSQL client utilities installed, create both a full rollback archive and a data-only archive:
 
 ```bash
 mkdir -p backups
 export OLD_DATABASE_URL='postgresql://old-user:old-password@old-host:5432/old-database'
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+
+# Full rollback archive; keep this confidential and outside Git.
 pg_dump --format=custom --schema=public --no-owner --no-acl \
   "$OLD_DATABASE_URL" > "backups/tailor-erp-$STAMP-full.dump"
+
+# Data archive for import into the new schema. Do not copy old migration rows.
 pg_dump --format=custom --schema=public --data-only --no-owner --no-acl \
   --exclude-table-data='*.__drizzle_migrations' \
   "$OLD_DATABASE_URL" > "backups/tailor-erp-$STAMP-data.dump"
 ```
 
-Using `--schema=public` deliberately copies the ERP tables and migration history without copying the former provider’s authentication schema. Keep the dump outside Git and protect it as confidential business data. PostgreSQL documents that custom-format archives are restored with `pg_restore` and can be inspected before restoration.[1] [2]
+The custom format is supported by `pg_restore`, but PostgreSQL warns that custom-format archives are sensitive to version differences between dump and restore tools. If the old database major version differs from the new Coolify PostgreSQL version, use a plain SQL dump and `psql` instead.[2] [3]
 
-## 2. Prepare the Hetzner server
-
-Install Docker Engine and the Docker Compose plugin on the existing Ubuntu server, then clone this repository into a private deployment directory:
+Keep both files outside the repository and restrict permissions:
 
 ```bash
-git clone https://github.com/NewMux/tailor-shop-erp.git /opt/tailor-shop-erp
-cd /opt/tailor-shop-erp
-cp .env.example .env
-chmod 600 .env
+chmod 600 backups/*.dump
 ```
 
-Edit `.env` and set values similar to the following. Use a long random PostgreSQL password; do not reuse the old database password.
+## 2. Create the Coolify service stack
+
+In Coolify, open the target project and choose **Create New Resource**. Select the GitHub repository through the GitHub App or deploy key, choose the branch `migration/self-hosted-hetzner` while reviewing the pull request, and select **Docker Compose** as the build pack. After the pull request is merged, change the branch to `main`.
+
+Use these values in the Compose configuration:
+
+| Coolify field | Value |
+|---|---|
+| Base directory | `/` |
+| Docker Compose location | `docker-compose.yml` |
+| Public service | `app` |
+| Public port | `3000` |
+| Database service | `postgres` |
+| Database public exposure | Disabled |
+| Persistent storage | Keep the `postgres_data` volume |
+
+Coolify’s Compose build pack expects the Compose path relative to the base directory and allows services to communicate through their service names.[1] The application’s internal database hostname is therefore `postgres`, not a public DNS name.
+
+The repository’s Compose file already includes a PostgreSQL health check, an application health check, the persistent `postgres_data` volume, and the `app` service’s internal port exposure. Do not add a custom `networks:` section or a public port mapping in the Coolify editor.
+
+## 3. Configure Coolify environment variables
+
+Add the following variables in the Coolify service-stack environment-variable screen. Use production values, not the placeholders shown below:
 
 ```dotenv
 POSTGRES_DB=tailor_erp
 POSTGRES_USER=erp
 POSTGRES_PASSWORD=replace-with-a-long-random-password
+DATABASE_URL=postgres://erp:replace-with-a-long-random-password@postgres:5432/tailor_erp
 OWNER_EMAIL=owner@example.com
 AUTH_BASE_URL=https://erp.example.com
 ALLOWED_ORIGIN=https://erp.example.com
+BUILT_IN_FORGE_API_URL=
+BUILT_IN_FORGE_API_KEY=
 ```
 
-The Compose file passes the database credentials only to the containers. Docker’s official guidance recommends keeping sensitive values out of the Compose file itself and using environment or secret mechanisms instead.[3]
+If the password contains URL-reserved characters, URL-encode it inside `DATABASE_URL`. Coolify supports managing environment variables in its UI; keep secrets there rather than committing them to Git.[4]
 
-Start PostgreSQL first so the restored data can be loaded into an empty database:
+`AUTH_BASE_URL` is the public frontend URL used in password-reset links. `ALLOWED_ORIGIN` must exactly match the browser origin that Vercel serves. If both a production and preview frontend must call the API, use a comma-separated allow-list, for example:
 
-```bash
-docker compose up -d postgres
-docker compose ps
+```dotenv
+ALLOWED_ORIGIN=https://erp.example.com,https://preview.example.vercel.app
 ```
 
-## 3. Create the current schema and restore the application data
+Do not add database credentials or backend secrets to Vercel.
 
-Copy the data archive to the server using a secure transfer method, for example `scp`, and place it under `/opt/tailor-shop-erp/backups/`. First build the app image and apply the checked-in Drizzle migrations to the empty PostgreSQL database. This creates the current schema and migration history without copying the former authentication provider's internal tables.
+## 4. Configure the API domain and HTTPS
 
-```bash
-docker compose build app
-docker compose run --rm app pnpm exec drizzle-kit migrate
+Create a DNS `A` or `AAAA` record such as `api.example.com` pointing to the Hetzner server. In the Coolify service-stack configuration, assign the public domain to the `app` service and set the exposed port to `3000`:
+
+```text
+https://api.example.com -> app:3000
 ```
 
-Restore the **data-only** archive into that freshly migrated schema. The archive intentionally excludes Drizzle's migration bookkeeping rows because the target already has the current migration history. Run this only after checking that the selected dump is the intended backup.
+Coolify’s proxy handles HTTPS and routing. The repository’s `Caddyfile.example` is retained only as a reference for deployments outside Coolify; it is not needed when Coolify’s proxy is active.
+
+Enable the application health check. The image and Compose service both check:
+
+```text
+GET /api/auth/session
+```
+
+An unauthenticated deployment should return HTTP 200 with `{"authenticated":false,"user":null}`. Coolify can route traffic only to healthy containers when health checks are enabled; failed checks can result in `404` or “No available server” responses from the proxy.[5]
+
+## 5. Deploy the initial stack
+
+Trigger the first deployment from Coolify. Watch the deployment logs until the following sequence completes:
+
+```text
+PostgreSQL becomes healthy
+Drizzle migrations run
+The Express server starts on port 3000
+The container health check passes
+Coolify marks the app healthy
+```
+
+The Docker image runs `pnpm exec drizzle-kit migrate` before starting the API. The checked-in migration journal includes the complete sequence through `0006_local_auth`, including the previously omitted offline-delivery/payroll migrations. This creates the schema before the old business data is imported.
+
+Do not import old data into the new database until the migration log shows success.
+
+## 6. Import existing business data
+
+The preferred path is to use the PostgreSQL resource’s **Import Backups** screen if your Coolify version exposes the database as a managed PostgreSQL resource. Coolify expects a custom-format archive made with `pg_dump -Fc`; its documentation also notes that plain or tar formats are safer across PostgreSQL major-version differences.[6]
+
+For the Compose stack, use the Coolify terminal or an SSH shell on the Hetzner server to copy the data archive into the server and restore it into the running `postgres` service. The exact container name is generated by Coolify, so identify it from the service logs or `docker ps` rather than hard-coding a name:
 
 ```bash
-export DUMP_FILE=backups/tailor-erp-YYYYMMDDTHHMMSSZ-data.dump
-docker compose exec -T postgres sh -c \
+# Run on the Hetzner host after the Coolify stack is healthy.
+docker ps --format '{{.Names}}\t{{.Image}}' | grep 'postgres:16-alpine'
+
+# Replace POSTGRES_CONTAINER with the generated Coolify container name.
+export POSTGRES_CONTAINER='replace-with-coolify-postgres-container'
+export DUMP_FILE='/opt/backups/tailor-erp-YYYYMMDDTHHMMSSZ-data.dump'
+
+# Restore only application data; the archive excludes old Drizzle migration rows.
+docker exec -i "$POSTGRES_CONTAINER" sh -c \
   'pg_restore --no-owner --no-acl --data-only --exit-on-error \
    -d "$POSTGRES_DB" -U "$POSTGRES_USER"' < "$DUMP_FILE"
 ```
 
-A restore can execute SQL from the archive, so inspect archives from trusted sources before loading them.[1] [2] The command uses `--exit-on-error` so a partial restore does not look successful. Keep the full archive as a rollback safeguard; restore only the data archive during the normal cutover.
+If Coolify’s generated container is not reachable from the host shell, use the resource’s terminal or Coolify’s database import feature instead. Do not expose PostgreSQL to the public internet merely to perform the import.
 
-## 4. Start the API
+After importing, redeploy or restart the `app` service so the API reconnects cleanly. Verify the existing customers, inventory, sales, invoices, tailoring orders, staff records, and role assignments before moving to user-password recovery.
 
-The `0006_local_auth.sql` migration adds `passwordHash`, `authSessions`, and `passwordResetTokens`; it does not replace or renumber the existing ERP tables.
+## 7. Re-establish user access
 
-```bash
-docker compose up -d app
-docker compose logs --tail=100 app
-```
-
-Check the unauthenticated session endpoint from the server itself:
+The restored `users` rows retain names, email addresses, roles, approvals, and business relationships, but old hosted-auth password hashes are not imported. Generate private one-time reset links from the Coolify application terminal or a one-off shell in the backend container:
 
 ```bash
-curl -fsS http://127.0.0.1:3000/api/auth/session
+RESET_LINKS_FILE=/tmp/reset-links.json pnpm auth:reset-links
 ```
 
-The expected response is JSON containing `"authenticated":false`. Do not expose PostgreSQL’s port publicly. The supplied Compose file binds the app only to `127.0.0.1`; expose the API through an HTTPS reverse proxy.
+Copy the generated file through a secure operator channel, deliver each link only to its matching user, and delete the file immediately. Each link expires after one hour and is invalidated after use. The account matching `OWNER_EMAIL` becomes administrator automatically when it registers or signs in. Other new accounts follow the existing owner-approval workflow.
 
-## 5. Put the API behind HTTPS
+The **Forgot password?** form returns a neutral response. Because this no-cost deployment does not assume a paid mail provider, the operator must generate and deliver reset links privately. SMTP can be added later without changing the authentication schema.
 
-Point an `A` or `AAAA` DNS record such as `api.example.com` to the Hetzner server. Configure the reverse proxy using `Caddyfile.example`, or reproduce the same rule in an existing Nginx installation:
+## 8. Configure the Vercel frontend
 
-```text
-api.example.com  →  http://127.0.0.1:3000
-```
-
-After HTTPS is active, verify the public endpoint:
-
-```bash
-curl -fsS https://api.example.com/api/auth/session
-```
-
-Set `ALLOWED_ORIGIN` to the exact Vercel frontend origin. If both a preview and production deployment must call the API, use a comma-separated value, for example `https://preview.example.vercel.app,https://erp.example.com`. Do not use `*` because the frontend uses credentials and authenticated requests.
-
-## 6. Deploy the frontend on Vercel
-
-Import the GitHub repository into the existing Vercel project. The checked-in `vercel.json` now runs `pnpm run build:frontend` and publishes only `dist/public`; it no longer deploys a Vercel API function.
-
-Create the following Vercel environment variable for both Preview and Production as appropriate:
+Keep the existing Vercel project, but set this build-time variable for the required environments:
 
 ```text
 VITE_API_URL=https://api.example.com
 ```
 
-Do not add `DATABASE_URL`, `POSTGRES_PASSWORD`, `OWNER_EMAIL`, or other backend secrets to Vercel. Deploy after saving the variable because Vercel applies environment-variable changes to new deployments rather than retroactively changing an existing deployment.[4]
+The repository’s `vercel.json` publishes only `dist/public` through `pnpm run build:frontend`; it no longer deploys a Vercel backend function. Deploy a new Vercel build after changing the variable because Vercel applies environment changes to new deployments.[7]
 
-After deployment, open the Vercel URL and confirm that the browser can reach the Hetzner API. A failed preflight request normally means that `ALLOWED_ORIGIN` does not exactly match the Vercel origin.
+Open the deployed frontend and confirm that the browser can reach `https://api.example.com/api/auth/session`. A failed CORS preflight usually means `ALLOWED_ORIGIN` does not exactly match the Vercel origin.
 
-## 7. Re-establish user access
+## 9. Acceptance test before cutover
 
-The restored `users` rows retain their names, email addresses, roles, approvals, and business relationships. Their old password hashes are not imported. Generate private one-time links for all existing users:
-
-```bash
-docker compose exec app sh -c \
-  'RESET_LINKS_FILE=/tmp/reset-links.json pnpm auth:reset-links'
-docker cp "$(docker compose ps -q app):/tmp/reset-links.json" ./reset-links.json
-chmod 600 ./reset-links.json
-```
-
-Deliver each link only to its matching user. Every generated link expires after one hour and is invalidated when used. Delete the local file after delivery. New users can register from the sign-in screen, and the account matching `OWNER_EMAIL` becomes the administrator automatically. Other new accounts enter the existing owner-approval workflow.
-
-The **Forgot password?** form intentionally returns a neutral response. With no paid mail service configured, the server administrator must use the server log or `pnpm auth:reset-links` to create and deliver the link privately. An SMTP provider can be added later without changing the database schema.
-
-## 8. Acceptance test before cutover
-
-Use the Vercel production URL and verify the following in order:
+Use the Vercel production URL and verify the following:
 
 | Area | Required check |
 |---|---|
+| Coolify routing | `https://api.example.com/api/auth/session` returns HTTP 200. |
 | Static frontend | The Vercel deployment loads without a Vercel function error. |
-| New authentication | Register a controlled test account, sign in, refresh the page, and sign out. |
+| New authentication | Register a controlled account, sign in, refresh, and sign out. |
 | Existing authentication | Use one generated reset link, set a new password, refresh, and sign in again. |
-| Authorization | Confirm the owner is an administrator and a newly registered non-owner remains pending until approved. |
-| Database | Create a test customer, inventory item, sale, and audit entry; verify the records survive a container restart. |
-| Storage | If staff documents are enabled, upload and download a controlled test document. |
-| Recovery | Request a second reset link, confirm that the first link is invalid, and confirm that an expired link is rejected. |
-| Backups | Create a fresh Hetzner `pg_dump` archive and record where it is stored. |
+| Authorization | Confirm the owner is an administrator and a new non-owner remains pending until approved. |
+| Database | Create a controlled customer, inventory item, sale, and audit entry; restart the app and verify persistence. |
+| Storage | If staff documents are enabled, upload and download a controlled document. |
+| Reset security | Generate a second reset link, confirm the first is invalid, and confirm an expired link is rejected. |
+| Backup | Create a fresh PostgreSQL dump using Coolify’s backup feature or `scripts/backup-db.sh`. |
 
-Keep the former production deployment available until these checks pass. Only then change the public workflow to the new Vercel deployment and API origin.
+Keep the former deployment available until these checks pass. Only then change the normal staff workflow to the new Vercel deployment and Coolify API domain.
 
-## 9. Routine operations
+## 10. Routine Coolify operations
 
-Use these commands for normal operations:
-
-```bash
-cd /opt/tailor-shop-erp
-docker compose ps
-docker compose logs --tail=100 app
-docker compose pull postgres
-docker compose up -d --build app
-```
-
-Create a recurring database backup outside the application directory. For example, the following command writes a compressed custom-format archive; choose a retention policy and copy backups to storage that is not the same disk as the live database:
+Use Coolify for normal deployments, restarts, logs, health checks, environment variables, and domain configuration. Use the repository scripts only from a trusted Coolify terminal or SSH session:
 
 ```bash
-mkdir -p /opt/backups/tailor-erp
-docker compose exec -T postgres pg_dump \
-  --format=custom --no-owner --no-acl \
-  -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-  > "/opt/backups/tailor-erp/$(date -u +%Y%m%dT%H%M%SZ).dump"
+# From the application source directory when using an SSH deployment shell.
+pnpm run check
+pnpm test
+pnpm run build
+
+# From the Compose stack host when the script is available there.
+./scripts/backup-db.sh
 ```
+
+Schedule backups through Coolify’s PostgreSQL backup facility when available. Keep at least one copy outside the live Hetzner disk; a backup stored only on the same server does not protect against server or disk loss.
 
 ## References
 
-[1]: https://www.postgresql.org/docs/current/app-pgdump.html "PostgreSQL pg_dump documentation"
+[1]: https://coolify.io/docs/applications/build-packs/docker-compose "Coolify Docker Compose Build Packs"
 
-[2]: https://www.postgresql.org/docs/current/app-pgrestore.html "PostgreSQL pg_restore documentation"
+[2]: https://www.postgresql.org/docs/current/app-pgdump.html "PostgreSQL pg_dump documentation"
 
-[3]: https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/ "Docker Compose environment variables"
+[3]: https://www.postgresql.org/docs/current/app-pgrestore.html "PostgreSQL pg_restore documentation"
 
-[4]: https://vercel.com/docs/environment-variables "Vercel environment variables"
+[4]: https://coolify.io/docs/knowledge-base/environment-variables "Coolify environment variables"
+
+[5]: https://coolify.io/docs/knowledge-base/health-checks "Coolify health checks"
+
+[6]: https://coolify.io/docs/databases/postgresql "Coolify PostgreSQL"
+
+[7]: https://vercel.com/docs/environment-variables "Vercel environment variables"

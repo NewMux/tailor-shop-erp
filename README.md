@@ -15,6 +15,6 @@ To run the standalone server locally, create a `.env` from `.env.example`, set `
 
 ## Production deployment
 
-Read [HETZNER_DEPLOYMENT.md](./HETZNER_DEPLOYMENT.md) before cutover. It describes the PostgreSQL backup and restore sequence, Docker Compose deployment, HTTPS reverse proxy, Vercel `VITE_API_URL` configuration, existing-user password reset links, acceptance testing, and recurring backups.
+Read [HETZNER_DEPLOYMENT.md](./HETZNER_DEPLOYMENT.md) before cutover. It describes the PostgreSQL backup and restore sequence, Coolify Docker Compose deployment, Coolify HTTPS domains and health checks, Vercel `VITE_API_URL` configuration, existing-user password reset links, acceptance testing, and recurring backups.
 
 The main operator guide is [ERP-HANDOVER-MANUAL.md](./ERP-HANDOVER-MANUAL.md). Do not commit `.env` files, database dumps, reset-link files, or production credentials.
