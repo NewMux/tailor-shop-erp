@@ -1,27 +1,23 @@
-export const measurementSheetFields = [
-  { key: "height", label: "Height (in)" },
-  { key: "backHeight", label: "Back height (in)" },
-  { key: "neck", label: "Neck (in)" },
-  { key: "width", label: "Width (in)" },
-  { key: "hand", label: "Hand (in)" },
-  { key: "shoulder", label: "Shoulder (in)" },
+export const measurementFields = [
+  { key: "lengthFL", label: "Length FL", type: "number" },
+  { key: "lengthBL", label: "Length BL", type: "number" },
+  { key: "chestWhole", label: "Chest Whole", type: "number" },
+  { key: "chestHalf", label: "Chest Half", type: "number" },
+  { key: "shoulder", label: "Shoulder", type: "number" },
+  { key: "sleeveLength", label: "Sleeve Length", type: "number" },
+  { key: "armHoleLoose", label: "Arm Hole Loose", type: "number" },
+  { key: "neck", label: "Neck", type: "number" },
+  { key: "hip", label: "Hip", type: "number" },
+  { key: "bottom", label: "Bottom", type: "number" },
+  { key: "fo", label: "FO", type: "number" },
+  { key: "model", label: "Model", type: "text" },
+  { key: "upperPocket", label: "Upper Pocket", type: "text" },
+  { key: "cuffling", label: "Cuffling", type: "text" },
+  { key: "openHand", label: "Open Hand", type: "text" },
+  { key: "embroidery", label: "Embroidery", type: "text" },
 ] as const;
 
-export const additionalMeasurementFields = [
-  { key: "chest", label: "Chest (in)" },
-  { key: "waist", label: "Waist (in)" },
-  { key: "sleeve", label: "Sleeve (in)" },
-  { key: "length", label: "Length (in)" },
-] as const;
-
-export const measurementDisplayFields = [
-  ...measurementSheetFields,
-  ...additionalMeasurementFields,
-  { key: "fitPreference", label: "Fit preference" },
-  { key: "collarStyle", label: "Collar type" },
-  { key: "collarConfiguration", label: "Collar configuration" },
-  { key: "pocketStyle", label: "Pocket style" },
-] as const;
+export const measurementDisplayFields = measurementFields;
 
 export const collarTypeOptions = [
   { value: "Bahraini", label: "Bahraini / بحريني" },
