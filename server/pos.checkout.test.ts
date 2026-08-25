@@ -153,9 +153,9 @@ describe("pos.checkout", () => {
     expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902, total: 20, paymentStatus: "partial" });
     expect(writes).toHaveLength(5);
     expect(writes[0]).toMatchObject({ customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", status: "confirmed", price: "45.000" });
-    expect(writes[1]).toMatchObject({ customerId: 44, subtotal: "20.000", total: "20.000", paymentStatus: "partial" });
+    expect(writes[1]).toMatchObject({ customerId: 44, subtotal: "45.000", total: "45.000", paidAmount: "20.000", paymentStatus: "partial" });
     expect(writes[2]).toMatchObject({ saleId: 712, method: "benefitpay", amount: "20.000" });
-    expect(writes[3]).toMatchObject({ saleId: 712, serviceId: null, inventoryItemId: null, assignedTailorId: 7, measurementProfileId: 9, lineTotal: "20.000" });
+    expect(writes[3]).toMatchObject({ saleId: 712, serviceId: null, inventoryItemId: null, assignedTailorId: 7, measurementProfileId: 9, lineTotal: "45.000" });
     expect(writes[4]).toMatchObject({ saleId: 712, invoiceNumber: "POS-000712", status: "partial" });
   });
 
@@ -183,7 +183,8 @@ describe("pos.checkout", () => {
     const result = await caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, serviceId: 4, garmentType: "Thoub", quantity: 1, dueDate: "2026-09-01", orderPrice: 45, paymentAmount: 20, paymentMethod: "benefitpay", notes: "[DEMO] Connected service order", productionNotes: "[DEMO] Deduct shop fabric." });
 
     expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 43 });
-    expect(writes[3]).toMatchObject({ saleId: 712, serviceId: 4, inventoryItemId: 81, assignedTailorId: 7, measurementProfileId: 9, quantity: "1.000", lineTotal: "20.000" });
+    expect(writes[1]).toMatchObject({ total: "45.000", paidAmount: "20.000" });
+    expect(writes[3]).toMatchObject({ saleId: 712, serviceId: 4, inventoryItemId: 81, assignedTailorId: 7, measurementProfileId: 9, quantity: "1.000", lineTotal: "45.000" });
     expect(stockUpdates).toEqual([{ saleId: 712 }, { quantity: "2.000" }]);
     expect(writes[4]).toMatchObject({ inventoryItemId: 81, movementType: "sale", referenceType: "tailoring_order", referenceId: 811, quantityChange: "-2.000", quantityAfter: "2.000" });
   });
@@ -214,8 +215,8 @@ describe("pos.checkout", () => {
 
     expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902, total: 0, paymentStatus: "unpaid" });
     expect(writes).toHaveLength(4);
-    expect(writes[1]).toMatchObject({ total: "0.000", paidAmount: "0.000", paymentStatus: "unpaid" });
-    expect(writes[2]).toMatchObject({ saleId: 712, lineTotal: "0.000", nameSnapshot: expect.stringContaining("unpaid") });
+    expect(writes[1]).toMatchObject({ subtotal: "45.000", total: "45.000", paidAmount: "0.000", paymentStatus: "unpaid" });
+    expect(writes[2]).toMatchObject({ saleId: 712, lineTotal: "45.000", nameSnapshot: expect.stringContaining("unpaid") });
     expect(writes[3]).toMatchObject({ saleId: 712, status: "unpaid" });
   });
 

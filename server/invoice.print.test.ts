@@ -10,6 +10,14 @@ describe("invoice printing", () => {
     expect(document).not.toContain("This page is not live");
   });
 
+  it("prints the full order total, paid amount, and remaining balance", () => {
+    const document = buildInvoicePrintDocument({ shop: null, invoice: { invoiceNumber: "INV-000003", status: "partial", issuedAt: new Date("2026-08-14T10:00:00.000Z") }, sale: { saleNumber: "POS-TO-3", customerName: "Ahmed", paymentMethod: "cash", subtotal: 47, discount: 0, total: 47, paidAmount: 10, remainingAmount: 37 }, items: [{ name: "Bespoke Thobe", quantity: 1, unitPrice: 47, lineTotal: 47 }] });
+    expect(document).toContain("BHD 47.000");
+    expect(document).toContain("BHD 10.000");
+    expect(document).toContain("BHD 37.000");
+    expect(document).toContain("Remaining balance");
+  });
+
   it("fills a POS-preopened print window with the issued invoice and invokes print", () => {
     const write = vi.fn();
     const print = vi.fn();
