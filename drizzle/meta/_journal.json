@@ -57,6 +57,13 @@
       "when": 1787547921592,
       "tag": "0006_local_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787675102326,
+      "tag": "0007_invoice_payment_ledger",
+      "breakpoints": true
     }
   ]
 }

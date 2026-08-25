@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { auditLogs, customers, customRoles, discountCodes, inventoryItems, invoices, measurementProfiles, posOrders, posPayments, posSessions, saleItems, sales, services, shopSettings, staffProfiles, stockMovements, tailoringOrders, userBusinessRoles, userCustomRoles } from "../drizzle/schema";
+import { auditLogs, customers, customRoles, discountCodes, inventoryItems, invoicePayments, invoices, measurementProfiles, posOrders, posPayments, posSessions, saleItems, sales, services, shopSettings, staffProfiles, stockMovements, tailoringOrders, userBusinessRoles, userCustomRoles } from "../drizzle/schema";
 import { getDb } from "./db";
 import { effectiveInventoryQuantity } from "./inventoryQuantity";
 import { protectedProcedure, router } from "./_core/trpc";
@@ -554,7 +554,9 @@ export const posRouter = router({
         await tx.insert(stockMovements).values({ inventoryItemId: effectiveLinkedStock.id, movementType: "sale", quantityChange: money(-stockNeeded), quantityBefore: money(before), quantityAfter: money(after), referenceType: "tailoring_order", referenceId: orderId, createdBy: ctx.user.id, notes: `${orderNumber} · ${money(stockPerPiece)} ${effectiveLinkedStock.unit} per piece` });
       }
       const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: paymentStatus, notes: `${orderNumber} · ${input.garmentType} · quoted ${money(input.orderPrice)} BHD incl. VAT · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "no payment"} collected from POS.${input.customerSuppliedFabric ? " Customer supplied fabric." : " Shop fabric."}` }).returning({ id: invoices.id });
-      return { orderId, saleId, invoiceId: Number(invoiceResult[0]?.id || 0) };
+      const invoiceId = Number(invoiceResult[0]?.id || 0);
+      if (input.paymentAmount > 0) await tx.insert(invoicePayments).values({ invoiceId, amount: money(input.paymentAmount), paymentMethod: input.paymentMethod, reference: `${orderNumber} initial payment`, previousPaidAmount: "0.000", paidTotal: money(input.paymentAmount), remainingAmount: money(Math.max(0, input.orderPrice - input.paymentAmount)), createdBy: ctx.user.id });
+      return { orderId, saleId, invoiceId };
     });
     await audit(ctx.user.id, "POS_TAILORING_CHECKOUT_COMPLETED", "tailoringOrder", transaction.orderId, { orderNumber, saleNumber, paymentAmount: input.paymentAmount, orderPrice: input.orderPrice, paymentStatus });
     return { ...transaction, orderNumber, saleNumber, total: input.paymentAmount, paymentStatus };

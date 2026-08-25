@@ -151,12 +151,13 @@ describe("pos.checkout", () => {
     });
 
     expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902, total: 20, paymentStatus: "partial" });
-    expect(writes).toHaveLength(5);
+    expect(writes).toHaveLength(6);
     expect(writes[0]).toMatchObject({ customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", status: "confirmed", price: "45.000" });
     expect(writes[1]).toMatchObject({ customerId: 44, subtotal: "45.000", total: "45.000", paidAmount: "20.000", paymentStatus: "partial" });
     expect(writes[2]).toMatchObject({ saleId: 712, method: "benefitpay", amount: "20.000" });
     expect(writes[3]).toMatchObject({ saleId: 712, serviceId: null, inventoryItemId: null, assignedTailorId: 7, measurementProfileId: 9, lineTotal: "45.000" });
     expect(writes[4]).toMatchObject({ saleId: 712, invoiceNumber: "POS-000712", status: "partial" });
+    expect(writes[5]).toMatchObject({ invoiceId: 902, amount: "20.000", paymentMethod: "benefitpay", previousPaidAmount: "0.000", paidTotal: "20.000", remainingAmount: "25.000" });
   });
 
   it("links a catalog tailoring service to the production sale and deducts linked shop fabric", async () => {

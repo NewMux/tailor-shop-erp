@@ -18,6 +18,19 @@ describe("invoice printing", () => {
     expect(document).toContain("Remaining balance");
   });
 
+  it("prints a payment receipt with the original invoice number and running payment balance", () => {
+    const document = buildInvoicePrintDocument({ shop: null, invoice: { invoiceNumber: "INV-000004", status: "partial", issuedAt: new Date("2026-08-14T10:00:00.000Z") }, sale: { saleNumber: "TO-4", customerName: "Ahmed", paymentMethod: "cash", subtotal: 47, discount: 0, total: 47 }, items: [{ name: "Bespoke Thobe", quantity: 1, unitPrice: 47, lineTotal: 47 }], payment: { amount: 10, previouslyPaidAmount: 0, paidTotal: 10, remainingAmount: 37, paymentMethod: "cash", reference: "TO-4 initial payment", createdAt: new Date("2026-08-14T10:00:00.000Z") } });
+    expect(document).toContain("Payment receipt");
+    expect(document).toContain("INV-000004");
+    expect(document).toContain("Previously paid");
+    expect(document).toContain("This payment");
+    expect(document).toContain("Paid total");
+    expect(document).toContain("Remaining balance");
+    expect(document.match(/BHD 47\.000/g)?.length).toBeGreaterThanOrEqual(1);
+    expect(document.match(/BHD 10\.000/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(document.match(/BHD 37\.000/g)?.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("fills a POS-preopened print window with the issued invoice and invokes print", () => {
     const write = vi.fn();
     const print = vi.fn();

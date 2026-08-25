@@ -179,6 +179,7 @@ export default function PointOfSale() {
         invoice: { invoiceNumber: detail.invoice.invoiceNumber, status: detail.invoice.status, issuedAt: detail.invoice.issuedAt, notes: detail.invoice.notes },
         sale: { saleNumber: detail.sale.saleNumber, customerName: detail.sale.customerNameSnapshot, customerPhone: detail.sale.customerPhoneSnapshot, paymentMethod: detail.sale.paymentMethod, subtotal: detail.sale.subtotal, discount: detail.sale.discount, vatRate: detail.sale.vatRate, vatAmount: detail.sale.vatAmount, total: detail.sale.total, paidAmount: detail.sale.paidAmount, remainingAmount: Math.max(0, Number(detail.sale.total || 0) - Number(detail.sale.paidAmount || 0)) },
         items: detail.items.map(item => ({ name: item.nameSnapshot, quantity: item.quantity, unitPrice: item.unitPrice, lineTotal: item.lineTotal })),
+        payment: orderNumber && detail.paymentRecords?.length ? (() => { const record = detail.paymentRecords[detail.paymentRecords.length - 1]; return { amount: record.amount, previouslyPaidAmount: record.previousPaidAmount, paidTotal: record.paidTotal, remainingAmount: record.remainingAmount, paymentMethod: record.paymentMethod, reference: record.reference, createdAt: record.createdAt }; })() : undefined,
       }, printWindow);
       toast.success(orderNumber ? `${orderNumber} confirmed · ${formatMoney(total)} collected` : `${saleNumber} completed · ${formatMoney(total)}`);
       if (!opened) toast.message("Invoice issued. Allow pop-ups to open its print window automatically.");
