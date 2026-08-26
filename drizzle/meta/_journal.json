@@ -64,6 +64,13 @@
       "when": 1787675102326,
       "tag": "0007_invoice_payment_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787722849423,
+      "tag": "0008_customer_directory_archive",
+      "breakpoints": true
     }
   ]
 }

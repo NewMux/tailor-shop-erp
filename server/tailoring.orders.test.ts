@@ -50,12 +50,13 @@ describe("tailoring order procedures", () => {
     await expect(caller.tailoring.create({ customerId: 8, measurementProfileId: 12, assignedTailorId: 6, garmentType: "Thoub", quantity: 1, dueDate: "", price: 0, notes: "", productionNotes: "" })).rejects.toThrow("active tailor");
   });
 
-  it("persists a valid ready-to-handed-over update and blocks an invalid shortcut", async () => {
+  it("allows a direct stage selection and persists the production update", async () => {
     const valid = makeDb({ currentStatus: "ready" }); getDbMock.mockResolvedValue(valid.db);
     const caller = erpRouter.createCaller(makeContext());
     await expect(caller.tailoring.update({ id: 44, assignedTailorId: 6, status: "handed_over", dueDate: "2026-08-28", productionNotes: "Collected by customer" })).resolves.toEqual({ success: true });
     expect(valid.updates).toHaveLength(1);
-    const invalid = makeDb({ currentStatus: "confirmed" }); getDbMock.mockResolvedValue(invalid.db);
-    await expect(caller.tailoring.update({ id: 44, assignedTailorId: 6, status: "handed_over", dueDate: "", productionNotes: "" })).rejects.toThrow("stages in sequence");
+    const direct = makeDb({ currentStatus: "confirmed" }); getDbMock.mockResolvedValue(direct.db);
+    await expect(caller.tailoring.update({ id: 44, assignedTailorId: 6, status: "handed_over", dueDate: "", productionNotes: "" })).resolves.toEqual({ success: true });
+    expect(direct.updates).toHaveLength(1);
   });
 });
