@@ -8,6 +8,8 @@ describe("invoice printing", () => {
     expect(document).toContain("Bespoke Thobe");
     expect(document).toContain("CR: DEMO-2026");
     expect(document).not.toContain("This page is not live");
+    expect(document).toContain('@page { size: A4; margin: 14mm; }');
+    expect(document).toContain('loading="eager"');
   });
 
   it("prints the full order total, paid amount, and remaining balance", () => {
@@ -16,6 +18,13 @@ describe("invoice printing", () => {
     expect(document).toContain("BHD 10.000");
     expect(document).toContain("BHD 37.000");
     expect(document).toContain("Remaining balance");
+  });
+
+  it("prints the tailoring Ready By date on A4 receipts", () => {
+    const document = buildInvoicePrintDocument({ shop: null, invoice: { invoiceNumber: "INV-000005", status: "partial", issuedAt: new Date("2026-08-14T10:00:00.000Z"), readyBy: new Date("2026-08-20T00:00:00.000Z") }, sale: { saleNumber: "TO-5", customerName: "Ahmed", paymentMethod: "cash", subtotal: 47, discount: 0, total: 47, paidAmount: 10, remainingAmount: 37 }, items: [{ name: "Bespoke Thobe", quantity: 1, unitPrice: 47, lineTotal: 47 }] });
+    expect(document).toContain("Ready By");
+    expect(document).toContain("Aug 20, 2026");
+    expect(document).toContain('@page { size: A4; margin: 14mm; }');
   });
 
   it("prints a payment receipt with the original invoice number and running payment balance", () => {
