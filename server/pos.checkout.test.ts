@@ -267,7 +267,7 @@ describe("pos.checkout", () => {
     mocked.getDb.mockResolvedValue(rootDb);
     const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
 
-    const result = await caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 1, dueDate: "2026-09-01", orderPrice: 45, paymentAmount: 20, paymentMethod: "cash", customerSuppliedFabric: false, fabricInventoryItemId: 55, fabricMeters: 3.5, notes: "", productionNotes: "" });
+    const result = await caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 1, dueDate: "2026-09-01", orderPrice: 45, paymentAmount: 20, paymentMethod: "cash", customerSuppliedFabric: false, fabricSelections: [{ inventoryItemId: 55, meters: 3.5 }], notes: "", productionNotes: "" });
 
     expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902 });
     expect(stockUpdates).toEqual([{ saleId: 712 }, { quantity: "14.500" }]);
@@ -293,7 +293,7 @@ describe("pos.checkout", () => {
     mocked.getDb.mockResolvedValue(rootDb);
     const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
 
-    await expect(caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 1, orderPrice: 45, paymentAmount: 0, paymentMethod: "cash", customerSuppliedFabric: false, fabricInventoryItemId: 55, fabricMeters: 5, notes: "", productionNotes: "" })).rejects.toThrow(/only has 2\.000 Meters available/);
+    await expect(caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 1, orderPrice: 45, paymentAmount: 0, paymentMethod: "cash", customerSuppliedFabric: false, fabricSelections: [{ inventoryItemId: 55, meters: 5 }], notes: "", productionNotes: "" })).rejects.toThrow(/only has 2\.000 Meters available/);
   });
 
   it("skips fabric stock lookup and deduction when the customer supplies their own fabric", async () => {
@@ -319,5 +319,61 @@ describe("pos.checkout", () => {
     expect(result).toMatchObject({ orderId: 811, saleId: 712 });
     expect(writes).toHaveLength(4);
     expect(writes[3]).toMatchObject({ notes: expect.stringContaining("Customer supplied fabric.") });
+  });
+
+  it("deducts a different fabric per piece when multiple pieces are ordered", async () => {
+    const writes: unknown[] = [];
+    const stockUpdates: unknown[] = [];
+    const transactionResponses = [
+      [{ id: 1, status: "open" }],
+      [{ id: 44, name: "[DEMO] Ahmed Al-Hassan", phone: "+973 3330 0011" }],
+      [{ id: 9, customerId: 44, version: 1 }],
+      [{ id: 7, name: "[DEMO] Khalid Tailor", isActive: true }],
+      [{ id: 55, name: "Toyobo Royal Cotton", inventoryType: "material", quantity: "18.000", unit: "Meters", isActive: true }],
+      [],
+      [{ id: 81, name: "Al Karama Linen", inventoryType: "material", quantity: "10.000", unit: "Meters", isActive: true }],
+      [],
+      [{ id: 90, name: "Silk Charmeuse", inventoryType: "material", quantity: "5.000", unit: "Meters", isActive: true }],
+      [],
+    ];
+    const transactionDb = {
+      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { writes.push(value); const insertIds = [811, 712, 901, 950, 951, 952, 902]; return { returning: () => [{ id: insertIds[writes.length - 1] }] }; }) })),
+      select: vi.fn(() => query(transactionResponses.shift() || [])),
+      update: vi.fn(() => ({ set: vi.fn((value: unknown) => { stockUpdates.push(value); return { where: vi.fn() }; }) })),
+    };
+    const rootResponses = [[{ userId: 1, role: "admin", isActive: true }], [{ invoicePrefix: "POS" }]];
+    const rootDb = { select: vi.fn(() => query(rootResponses.shift() || [])), insert: vi.fn(() => ({ values: vi.fn() })), transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)) };
+    mocked.getDb.mockResolvedValue(rootDb);
+    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+
+    const result = await caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 3, orderPrice: 135, paymentAmount: 0, paymentMethod: "cash", customerSuppliedFabric: false, fabricSelections: [{ inventoryItemId: 55, meters: 2.5 }, { inventoryItemId: 81, meters: 1.5 }, { inventoryItemId: 90, meters: 1 }], notes: "", productionNotes: "" });
+
+    expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902 });
+    expect(stockUpdates).toEqual([{ saleId: 712 }, { quantity: "15.500" }, { quantity: "8.500" }, { quantity: "4.000" }]);
+    expect(writes[3]).toMatchObject({ inventoryItemId: 55, quantityChange: "-2.500", quantityAfter: "15.500" });
+    expect(writes[4]).toMatchObject({ inventoryItemId: 81, quantityChange: "-1.500", quantityAfter: "8.500" });
+    expect(writes[5]).toMatchObject({ inventoryItemId: 90, quantityChange: "-1.000", quantityAfter: "4.000" });
+    expect(writes[6]).toMatchObject({ notes: expect.stringContaining("Toyobo Royal Cotton (2.500 Meters), Al Karama Linen (1.500 Meters), Silk Charmeuse (1.000 Meters)") });
+  });
+
+  it("rejects the order when the same fabric is used across pieces beyond its combined available stock", async () => {
+    const transactionResponses = [
+      [{ id: 1, status: "open" }],
+      [{ id: 44, name: "[DEMO] Ahmed Al-Hassan", phone: "+973 3330 0011" }],
+      [{ id: 9, customerId: 44, version: 1 }],
+      [{ id: 7, name: "[DEMO] Khalid Tailor", isActive: true }],
+      [{ id: 55, name: "Toyobo Royal Cotton", inventoryType: "material", quantity: "3.000", unit: "Meters", isActive: true }],
+    ];
+    const transactionDb = {
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: () => [{ id: 1 }] })) })),
+      select: vi.fn(() => query(transactionResponses.shift() || [])),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
+    };
+    const rootResponses = [[{ userId: 1, role: "admin", isActive: true }], [{ invoicePrefix: "POS" }]];
+    const rootDb = { select: vi.fn(() => query(rootResponses.shift() || [])), insert: vi.fn(() => ({ values: vi.fn() })), transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)) };
+    mocked.getDb.mockResolvedValue(rootDb);
+    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+
+    await expect(caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 2, orderPrice: 90, paymentAmount: 0, paymentMethod: "cash", customerSuppliedFabric: false, fabricSelections: [{ inventoryItemId: 55, meters: 2 }, { inventoryItemId: 55, meters: 2 }], notes: "", productionNotes: "" })).rejects.toThrow(/only has 3\.000 Meters available.*4\.000 Meters requested/);
   });
 });
