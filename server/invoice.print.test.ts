@@ -45,8 +45,8 @@ describe("invoice printing", () => {
     expect(withoutMeasurements).not.toContain("Measurements");
 
     const withMeasurements = buildInvoicePrintDocument({ shop: null, invoice: { invoiceNumber: "INV-000007", status: "paid", issuedAt: new Date("2026-08-14T10:00:00.000Z") }, sale: { saleNumber: "TO-7", customerName: "Ahmed", paymentMethod: "cash", subtotal: 45, discount: 0, total: 45 }, items: [{ name: "Thoub tailoring order", quantity: 1, unitPrice: 45, lineTotal: 45 }], measurements: { version: 2, fitPreference: "Slim", collarStyle: "Bahraini", pocketStyle: "2", values: { lengthFL: "58", chestWhole: "108", neck: "" } } });
-    expect(withMeasurements).toContain("Measurements");
-    expect(withMeasurements).toContain("version 2");
+    expect(withMeasurements).toContain("Customer Measurements");
+    expect(withMeasurements).toContain("Version 2");
     expect(withMeasurements).toContain("Slim");
     expect(withMeasurements).toContain("Bahraini");
     expect(withMeasurements).toContain("Length FL");
