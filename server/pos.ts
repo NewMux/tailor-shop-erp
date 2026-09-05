@@ -123,19 +123,23 @@ const tailoringCheckoutInput = z.object({
   garmentType: z.string().trim().min(2).max(80),
   quantity: z.number().int().min(1).max(20),
   dueDate: z.string().optional(),
-  orderPrice: z.number().positive(),
+  pieces: z.array(z.object({ price: z.number().positive(), fabricInventoryItemId: z.number().int().positive().optional(), meters: z.number().positive().max(100000).optional() })).min(1).max(20),
   paymentAmount: z.number().min(0).max(1000000),
   customerSuppliedFabric: z.boolean().default(false),
   fabricNotes: z.string().max(2000).optional(),
-  fabricSelections: z.array(z.object({ inventoryItemId: z.number().int().positive(), meters: z.number().positive().max(100000) })).max(20).optional(),
   includeMeasurementsOnInvoice: z.boolean().default(false),
   paymentMethod,
   notes: z.string().max(3000),
   productionNotes: z.string().max(3000),
 }).superRefine((value, ctx) => {
-  if (value.paymentAmount > value.orderPrice) ctx.addIssue({ code: "custom", path: ["paymentAmount"], message: "The payment collected cannot exceed the quoted order price." });
-  if (value.customerSuppliedFabric && value.fabricSelections?.length) ctx.addIssue({ code: "custom", path: ["fabricSelections"], message: "Fabric selections cannot be combined with customer-supplied fabric." });
-  if (value.fabricSelections && value.fabricSelections.length > value.quantity) ctx.addIssue({ code: "custom", path: ["fabricSelections"], message: "There cannot be more fabric selections than pieces on this order." });
+  if (value.pieces.length !== value.quantity) ctx.addIssue({ code: "custom", path: ["pieces"], message: "Enter a fabric and price row for every piece on this order." });
+  const orderPrice = value.pieces.reduce((sum, piece) => sum + piece.price, 0);
+  if (value.paymentAmount > orderPrice) ctx.addIssue({ code: "custom", path: ["paymentAmount"], message: "The payment collected cannot exceed the total quoted price." });
+  if (value.customerSuppliedFabric && value.pieces.some(piece => piece.fabricInventoryItemId)) ctx.addIssue({ code: "custom", path: ["pieces"], message: "Fabric selections cannot be combined with customer-supplied fabric." });
+  for (const piece of value.pieces) {
+    if (!value.customerSuppliedFabric && piece.fabricInventoryItemId && !piece.meters) ctx.addIssue({ code: "custom", path: ["pieces"], message: "Enter the meters used for the selected fabric." });
+    if (!value.customerSuppliedFabric && piece.meters && !piece.fabricInventoryItemId) ctx.addIssue({ code: "custom", path: ["pieces"], message: "Choose a fabric before entering meters used." });
+  }
 });
 
 const heldOrderInput = z.object({
@@ -526,8 +530,9 @@ export const posRouter = router({
     const shop = (await db.select().from(shopSettings).limit(1))[0];
     const orderNumber = `TO-${Date.now()}`;
     const saleNumber = `POS-TO-${Date.now()}`;
-    const paymentStatus = input.paymentAmount >= input.orderPrice - 0.001 ? "paid" : input.paymentAmount > 0 ? "partial" : "unpaid" as const;
-    const orderTax = taxFromGross(input.orderPrice, shop);
+    const orderPrice = input.pieces.reduce((sum, piece) => sum + piece.price, 0);
+    const paymentStatus = input.paymentAmount >= orderPrice - 0.001 ? "paid" : input.paymentAmount > 0 ? "partial" : "unpaid" as const;
+    const orderTax = taxFromGross(orderPrice, shop);
     const transaction = await db.transaction(async tx => {
       const resolvedSession = await resolveSession(tx, input.sessionId, ctx.user.id);
       const customer = (await tx.select().from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
@@ -546,9 +551,8 @@ export const posRouter = router({
       const linkedAvailableQuantity = linkedStock ? effectiveInventoryQuantity({ inventoryType: linkedStock.inventoryType, quantity: linkedStock.quantity, rollCount: linkedStock.rollCount, metersPerRoll: linkedStock.metersPerRoll, hasMovement: Boolean(linkedStockMovement) }) : 0;
       const effectiveLinkedStock = linkedStock ? (linkedAvailableQuantity === Number(linkedStock.quantity) ? linkedStock : { ...linkedStock, quantity: money(linkedAvailableQuantity) }) : null;
       if (!input.customerSuppliedFabric && effectiveLinkedStock && linkedAvailableQuantity < stockNeeded) throw new TRPCError({ code: "BAD_REQUEST", message: `${effectiveLinkedStock.name} does not have enough stock for this tailoring order.` });
-      const fabricSelections = input.customerSuppliedFabric ? [] : input.fabricSelections || [];
       const fabricMetersByItem = new Map<number, number>();
-      for (const selection of fabricSelections) fabricMetersByItem.set(selection.inventoryItemId, (fabricMetersByItem.get(selection.inventoryItemId) || 0) + selection.meters);
+      if (!input.customerSuppliedFabric) for (const piece of input.pieces) if (piece.fabricInventoryItemId && piece.meters) fabricMetersByItem.set(piece.fabricInventoryItemId, (fabricMetersByItem.get(piece.fabricInventoryItemId) || 0) + piece.meters);
       const fabricStockByItem = new Map<number, { stock: typeof inventoryItems.$inferSelect; available: number; needed: number }>();
       for (const [itemId, needed] of Array.from(fabricMetersByItem.entries())) {
         const stock = (await tx.select().from(inventoryItems).where(eq(inventoryItems.id, itemId)).for("update").limit(1))[0];
@@ -558,19 +562,18 @@ export const posRouter = router({
         if (needed > available) throw new TRPCError({ code: "BAD_REQUEST", message: `${stock.name} only has ${money(available)} ${stock.unit} available, which is less than the ${money(needed)} ${stock.unit} requested across this order's pieces.` });
         fabricStockByItem.set(itemId, { stock, available, needed });
       }
-      const orderResult = await tx.insert(tailoringOrders).values({ orderNumber, customerId: customer.id, measurementProfileId: measurement.id, assignedTailorId: tailor.id, garmentType: input.garmentType, quantity: input.quantity, dueDate: input.dueDate ? new Date(input.dueDate) : null, price: money(input.orderPrice), customerSuppliedFabric: input.customerSuppliedFabric, fabricNotes: input.fabricNotes || null, includeMeasurementsOnInvoice: input.includeMeasurementsOnInvoice, status: "confirmed", notes: input.notes || null, productionNotes: input.productionNotes || null, createdBy: ctx.user.id }).returning({ id: tailoringOrders.id });
+      const orderResult = await tx.insert(tailoringOrders).values({ orderNumber, customerId: customer.id, measurementProfileId: measurement.id, assignedTailorId: tailor.id, garmentType: input.garmentType, quantity: input.quantity, dueDate: input.dueDate ? new Date(input.dueDate) : null, price: money(orderPrice), customerSuppliedFabric: input.customerSuppliedFabric, fabricNotes: input.fabricNotes || null, includeMeasurementsOnInvoice: input.includeMeasurementsOnInvoice, status: "confirmed", notes: input.notes || null, productionNotes: input.productionNotes || null, createdBy: ctx.user.id }).returning({ id: tailoringOrders.id });
       const orderId = Number(orderResult[0]?.id || 0);
-      const saleResult = await tx.insert(sales).values({ saleNumber, clientReference: input.clientReference || null, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(orderTax.netAmount), discount: "0.000", vatRate: money(orderTax.vatRate), vatAmount: money(orderTax.vatAmount), total: money(input.orderPrice), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: resolvedSession.id, createdBy: ctx.user.id }).returning({ id: sales.id });
+      const saleResult = await tx.insert(sales).values({ saleNumber, clientReference: input.clientReference || null, customerId: customer.id, customerNameSnapshot: customer.name, customerPhoneSnapshot: customer.phone || null, subtotal: money(orderTax.netAmount), discount: "0.000", vatRate: money(orderTax.vatRate), vatAmount: money(orderTax.vatAmount), total: money(orderPrice), paidAmount: money(input.paymentAmount), paymentMethod: input.paymentMethod, paymentStatus, source: "tailoring", sessionId: resolvedSession.id, createdBy: ctx.user.id }).returning({ id: sales.id });
       const saleId = Number(saleResult[0]?.id || 0); await tx.update(tailoringOrders).set({ saleId }).where(eq(tailoringOrders.id, orderId)); if (input.paymentAmount > 0) await tx.insert(posPayments).values({ saleId, method: input.paymentMethod, amount: money(input.paymentAmount), reference: `${orderNumber} initial payment`, createdBy: ctx.user.id });
       const paymentStatusLabel = paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "unpaid";
       const baseDescription = `${service?.name || input.garmentType} tailoring order`;
-      const unitPrice = orderTax.netAmount / input.quantity;
-      const fabricGroups = Array.from(fabricStockByItem.entries()).map(([itemId, { stock }]) => ({ count: fabricSelections.filter(selection => selection.inventoryItemId === itemId).length, label: `${stock.name}${stock.color ? ` (${stock.color})` : ""}` }));
-      const unassignedPieces = input.quantity - fabricGroups.reduce((sum, group) => sum + group.count, 0);
-      const saleItemGroups = unassignedPieces > 0 ? [...fabricGroups, { count: unassignedPieces, label: null }] : fabricGroups;
-      for (const group of saleItemGroups) {
-        const nameSnapshot = `${baseDescription}${group.label ? ` · ${group.label}` : ""} · ${paymentStatusLabel}`;
-        await tx.insert(saleItems).values({ saleId, serviceId: service?.id || null, inventoryItemId: linkedStock?.id || null, nameSnapshot, quantity: money(group.count), unitPrice: money(unitPrice), lineDiscount: "0.000", lineTotal: money(unitPrice * group.count), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
+      for (const piece of input.pieces) {
+        const fabricItemId = input.customerSuppliedFabric ? undefined : piece.fabricInventoryItemId;
+        const fabricLabel = fabricItemId ? (() => { const entry = fabricStockByItem.get(fabricItemId); return entry ? `${entry.stock.name}${entry.stock.color ? ` (${entry.stock.color})` : ""}` : null; })() : null;
+        const nameSnapshot = `${baseDescription}${fabricLabel ? ` · ${fabricLabel}` : ""} · ${paymentStatusLabel}`;
+        const pieceTax = taxFromGross(piece.price, shop);
+        await tx.insert(saleItems).values({ saleId, serviceId: service?.id || null, inventoryItemId: linkedStock?.id || null, nameSnapshot, quantity: "1.000", unitPrice: money(pieceTax.netAmount), lineDiscount: "0.000", lineTotal: money(pieceTax.netAmount), assignedTailorId: tailor.id, measurementProfileId: measurement.id });
       }
       if (!input.customerSuppliedFabric && effectiveLinkedStock && stockNeeded > 0) {
         const before = linkedAvailableQuantity;
@@ -580,17 +583,17 @@ export const posRouter = router({
       }
       for (const [itemId, { stock, available, needed }] of Array.from(fabricStockByItem.entries())) {
         const after = available - needed;
-        const pieceCount = fabricSelections.filter(selection => selection.inventoryItemId === itemId).length;
+        const pieceCount = input.pieces.filter(piece => !input.customerSuppliedFabric && piece.fabricInventoryItemId === itemId).length;
         await tx.update(inventoryItems).set({ quantity: money(after) }).where(eq(inventoryItems.id, itemId));
         await tx.insert(stockMovements).values({ inventoryItemId: itemId, movementType: "sale", quantityChange: money(-needed), quantityBefore: money(available), quantityAfter: money(after), referenceType: "tailoring_order", referenceId: orderId, createdBy: ctx.user.id, notes: `${orderNumber} · fabric selection · ${pieceCount} piece${pieceCount === 1 ? "" : "s"} · ${money(needed)} ${stock.unit}` });
       }
       const fabricInvoiceNote = input.customerSuppliedFabric ? " Customer supplied fabric." : "";
-      const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: paymentStatus, notes: `${orderNumber} · ${input.garmentType} · quoted ${money(input.orderPrice)} BHD incl. VAT · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "no payment"} collected from POS.${fabricInvoiceNote}` }).returning({ id: invoices.id });
+      const invoiceResult = await tx.insert(invoices).values({ saleId, invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`, status: paymentStatus, notes: `${orderNumber} · ${input.garmentType} · quoted ${money(orderPrice)} BHD incl. VAT · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "no payment"} collected from POS.${fabricInvoiceNote}` }).returning({ id: invoices.id });
       const invoiceId = Number(invoiceResult[0]?.id || 0);
-      if (input.paymentAmount > 0) await tx.insert(invoicePayments).values({ invoiceId, amount: money(input.paymentAmount), paymentMethod: input.paymentMethod, reference: `${orderNumber} initial payment`, previousPaidAmount: "0.000", paidTotal: money(input.paymentAmount), remainingAmount: money(Math.max(0, input.orderPrice - input.paymentAmount)), createdBy: ctx.user.id });
+      if (input.paymentAmount > 0) await tx.insert(invoicePayments).values({ invoiceId, amount: money(input.paymentAmount), paymentMethod: input.paymentMethod, reference: `${orderNumber} initial payment`, previousPaidAmount: "0.000", paidTotal: money(input.paymentAmount), remainingAmount: money(Math.max(0, orderPrice - input.paymentAmount)), createdBy: ctx.user.id });
       return { orderId, saleId, invoiceId };
     });
-    await audit(ctx.user.id, "POS_TAILORING_CHECKOUT_COMPLETED", "tailoringOrder", transaction.orderId, { orderNumber, saleNumber, paymentAmount: input.paymentAmount, orderPrice: input.orderPrice, paymentStatus });
+    await audit(ctx.user.id, "POS_TAILORING_CHECKOUT_COMPLETED", "tailoringOrder", transaction.orderId, { orderNumber, saleNumber, paymentAmount: input.paymentAmount, orderPrice, paymentStatus });
     return { ...transaction, orderNumber, saleNumber, total: input.paymentAmount, paymentStatus };
   }),
 });
