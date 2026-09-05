@@ -71,6 +71,13 @@
       "when": 1787722849423,
       "tag": "0008_customer_directory_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788157200000,
+      "tag": "0009_tailoring_invoice_measurements",
+      "breakpoints": true
     }
   ]
 }

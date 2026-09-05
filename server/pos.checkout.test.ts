@@ -146,13 +146,14 @@ describe("pos.checkout", () => {
       orderPrice: 45,
       paymentAmount: 20,
       paymentMethod: "benefitpay",
+      includeMeasurementsOnInvoice: true,
       notes: "[DEMO] Counter thoub order",
       productionNotes: "[DEMO] Begin after fabric selection.",
     });
 
     expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902, total: 20, paymentStatus: "partial" });
     expect(writes).toHaveLength(6);
-    expect(writes[0]).toMatchObject({ customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", status: "confirmed", price: "45.000" });
+    expect(writes[0]).toMatchObject({ customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", status: "confirmed", price: "45.000", includeMeasurementsOnInvoice: true });
     expect(writes[1]).toMatchObject({ customerId: 44, subtotal: "45.000", total: "45.000", paidAmount: "20.000", paymentStatus: "partial" });
     expect(writes[2]).toMatchObject({ saleId: 712, method: "benefitpay", amount: "20.000" });
     expect(writes[3]).toMatchObject({ saleId: 712, serviceId: null, inventoryItemId: null, assignedTailorId: 7, measurementProfileId: 9, lineTotal: "45.000" });
@@ -272,7 +273,7 @@ describe("pos.checkout", () => {
     expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902 });
     expect(stockUpdates).toEqual([{ saleId: 712 }, { quantity: "14.500" }]);
     expect(writes[4]).toMatchObject({ inventoryItemId: 55, movementType: "sale", referenceType: "tailoring_order", referenceId: 811, quantityChange: "-3.500", quantityBefore: "18.000", quantityAfter: "14.500" });
-    expect(writes[5]).toMatchObject({ notes: expect.stringContaining("Toyobo Royal Cotton (3.500 Meters)") });
+    expect(writes[3]).toMatchObject({ nameSnapshot: expect.stringContaining("Toyobo Royal Cotton"), quantity: "1.000" });
   });
 
   it("rejects a tailoring order when the requested fabric meters exceed available stock", async () => {
@@ -337,7 +338,7 @@ describe("pos.checkout", () => {
       [],
     ];
     const transactionDb = {
-      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { writes.push(value); const insertIds = [811, 712, 901, 950, 951, 952, 902]; return { returning: () => [{ id: insertIds[writes.length - 1] }] }; }) })),
+      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { writes.push(value); const insertIds = [811, 712, 901, 902, 903, 950, 951, 952, 904]; return { returning: () => [{ id: insertIds[writes.length - 1] }] }; }) })),
       select: vi.fn(() => query(transactionResponses.shift() || [])),
       update: vi.fn(() => ({ set: vi.fn((value: unknown) => { stockUpdates.push(value); return { where: vi.fn() }; }) })),
     };
@@ -348,12 +349,14 @@ describe("pos.checkout", () => {
 
     const result = await caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 3, orderPrice: 135, paymentAmount: 0, paymentMethod: "cash", customerSuppliedFabric: false, fabricSelections: [{ inventoryItemId: 55, meters: 2.5 }, { inventoryItemId: 81, meters: 1.5 }, { inventoryItemId: 90, meters: 1 }], notes: "", productionNotes: "" });
 
-    expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 902 });
+    expect(result).toMatchObject({ orderId: 811, saleId: 712, invoiceId: 904 });
     expect(stockUpdates).toEqual([{ saleId: 712 }, { quantity: "15.500" }, { quantity: "8.500" }, { quantity: "4.000" }]);
-    expect(writes[3]).toMatchObject({ inventoryItemId: 55, quantityChange: "-2.500", quantityAfter: "15.500" });
-    expect(writes[4]).toMatchObject({ inventoryItemId: 81, quantityChange: "-1.500", quantityAfter: "8.500" });
-    expect(writes[5]).toMatchObject({ inventoryItemId: 90, quantityChange: "-1.000", quantityAfter: "4.000" });
-    expect(writes[6]).toMatchObject({ notes: expect.stringContaining("Toyobo Royal Cotton (2.500 Meters), Al Karama Linen (1.500 Meters), Silk Charmeuse (1.000 Meters)") });
+    expect(writes[2]).toMatchObject({ nameSnapshot: "Thoub tailoring order · Toyobo Royal Cotton · unpaid", quantity: "1.000" });
+    expect(writes[3]).toMatchObject({ nameSnapshot: "Thoub tailoring order · Al Karama Linen · unpaid", quantity: "1.000" });
+    expect(writes[4]).toMatchObject({ nameSnapshot: "Thoub tailoring order · Silk Charmeuse · unpaid", quantity: "1.000" });
+    expect(writes[5]).toMatchObject({ inventoryItemId: 55, quantityChange: "-2.500", quantityAfter: "15.500" });
+    expect(writes[6]).toMatchObject({ inventoryItemId: 81, quantityChange: "-1.500", quantityAfter: "8.500" });
+    expect(writes[7]).toMatchObject({ inventoryItemId: 90, quantityChange: "-1.000", quantityAfter: "4.000" });
   });
 
   it("rejects the order when the same fabric is used across pieces beyond its combined available stock", async () => {

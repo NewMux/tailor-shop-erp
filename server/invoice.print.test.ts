@@ -40,6 +40,22 @@ describe("invoice printing", () => {
     expect(document.match(/BHD 37\.000/g)?.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("prints an optional measurements section only when measurements are supplied", () => {
+    const withoutMeasurements = buildInvoicePrintDocument({ shop: null, invoice: { invoiceNumber: "INV-000006", status: "paid", issuedAt: new Date("2026-08-14T10:00:00.000Z") }, sale: { saleNumber: "TO-6", customerName: "Ahmed", paymentMethod: "cash", subtotal: 45, discount: 0, total: 45 }, items: [{ name: "Thoub tailoring order", quantity: 1, unitPrice: 45, lineTotal: 45 }] });
+    expect(withoutMeasurements).not.toContain("Measurements");
+
+    const withMeasurements = buildInvoicePrintDocument({ shop: null, invoice: { invoiceNumber: "INV-000007", status: "paid", issuedAt: new Date("2026-08-14T10:00:00.000Z") }, sale: { saleNumber: "TO-7", customerName: "Ahmed", paymentMethod: "cash", subtotal: 45, discount: 0, total: 45 }, items: [{ name: "Thoub tailoring order", quantity: 1, unitPrice: 45, lineTotal: 45 }], measurements: { version: 2, fitPreference: "Slim", collarStyle: "Bahraini", pocketStyle: "2", values: { lengthFL: "58", chestWhole: "108", neck: "" } } });
+    expect(withMeasurements).toContain("Measurements");
+    expect(withMeasurements).toContain("version 2");
+    expect(withMeasurements).toContain("Slim");
+    expect(withMeasurements).toContain("Bahraini");
+    expect(withMeasurements).toContain("Length FL");
+    expect(withMeasurements).toContain("58");
+    expect(withMeasurements).toContain("Chest Whole");
+    expect(withMeasurements).toContain("108");
+    expect(withMeasurements).not.toContain("Neck");
+  });
+
   it("fills a POS-preopened print window with the issued invoice and invokes print", () => {
     const write = vi.fn();
     const print = vi.fn();
