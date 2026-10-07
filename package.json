@@ -16,7 +16,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
-    "auth:reset-links": "node scripts/generate-reset-links.mjs"
+    "auth:reset-links": "node scripts/generate-reset-links.mjs",
+    "auth:grant-super-admin": "node scripts/grant-super-admin.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",

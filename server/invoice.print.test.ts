@@ -8,7 +8,7 @@ describe("invoice printing", () => {
     expect(document).toContain("Bespoke Thobe");
     expect(document).toContain("CR: DEMO-2026");
     expect(document).not.toContain("This page is not live");
-    expect(document).toContain('@page { size: A4; margin: 14mm; }');
+    expect(document).toContain('@page { margin: 12mm 10mm; }');
     expect(document).toContain('loading="eager"');
   });
 
@@ -24,7 +24,7 @@ describe("invoice printing", () => {
     const document = buildInvoicePrintDocument({ shop: null, invoice: { invoiceNumber: "INV-000005", status: "partial", issuedAt: new Date("2026-08-14T10:00:00.000Z"), readyBy: new Date("2026-08-20T00:00:00.000Z") }, sale: { saleNumber: "TO-5", customerName: "Ahmed", paymentMethod: "cash", subtotal: 47, discount: 0, total: 47, paidAmount: 10, remainingAmount: 37 }, items: [{ name: "Bespoke Thobe", quantity: 1, unitPrice: 47, lineTotal: 47 }] });
     expect(document).toContain("Ready By");
     expect(document).toContain("Aug 20, 2026");
-    expect(document).toContain('@page { size: A4; margin: 14mm; }');
+    expect(document).toContain('@page { margin: 12mm 10mm; }');
   });
 
   it("prints a payment receipt with the original invoice number and running payment balance", () => {
